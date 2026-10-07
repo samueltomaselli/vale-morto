@@ -243,6 +243,20 @@ export class Ground {
           b = base + n + 4
           break
         }
+        case T.PLAZA: {
+          const row = Math.floor(wy / 12)
+          const off = row % 2 ? 12 : 0
+          const col = Math.floor((wx + off) / 24)
+          const seam = wy % 12 === 0 || (wx + off) % 24 === 0
+          const tone = hash(col, row, 61)
+          const red = tone < 0.18
+          const n = (hash(wx, wy, 62) - 0.5) * 10 + (samp(wx / 90 + 7, wy / 90 + 3) - 0.5) * 16
+          const v = seam ? -34 : 0
+          r = (red ? 150 : 138 + tone * 24) + n + v
+          gg = (red ? 104 : 130 + tone * 20) + n + v
+          b = (red ? 86 : 118 + tone * 16) + n + v
+          break
+        }
         case T.SIDEWALK: {
           const n = (samp(wx / 40 + 98, wy / 40 + 60) - 0.5) * 14 + (hash(wx, wy, 32) - 0.5) * 9
           const seam = wx % 32 === 0 || wy % 32 === 0 ? -22 : wx % 32 === 1 || wy % 32 === 1 ? 10 : 0
@@ -359,6 +373,38 @@ export class Ground {
         this.details(g, x, y)
       }
     }
+    if (W.roadLines && W.roadLines.length) {
+      const bx0 = cx * C - 1
+      const by0 = cy * C - 1
+      const bx1 = bx0 + C + 2
+      const by1 = by0 + C + 2
+      g.strokeStyle = 'rgba(214,178,70,0.7)'
+      g.lineWidth = 2.2
+      g.setLineDash([16, 18])
+      g.lineCap = 'butt'
+      for (const L of W.roadLines) {
+        let any = false
+        for (let i = 0; i < L.length; i += 2) if (L[i] >= bx0 && L[i] <= bx1 && L[i + 1] >= by0 && L[i + 1] <= by1) any = true
+        if (!any) {
+          for (let i = 0; i + 3 < L.length; i += 2) {
+            const minx = Math.min(L[i], L[i + 2])
+            const maxx = Math.max(L[i], L[i + 2])
+            const miny = Math.min(L[i + 1], L[i + 3])
+            const maxy = Math.max(L[i + 1], L[i + 3])
+            if (maxx >= bx0 && minx <= bx1 && maxy >= by0 && miny <= by1) any = true
+          }
+        }
+        if (!any) continue
+        g.beginPath()
+        g.lineDashOffset = 0
+        for (let i = 0; i + 1 < L.length; i += 2) {
+          if (i === 0) g.moveTo(L[0] * TS, L[1] * TS)
+          else g.lineTo(L[i] * TS, L[i + 1] * TS)
+        }
+        g.stroke()
+      }
+      g.setLineDash([])
+    }
     return c
   }
 
@@ -385,6 +431,11 @@ export class Ground {
       return
     }
     const near = (dx, dy) => this.base(x + dx, y + dy)
+    if (t === T.PLAZA) {
+      if (h < 0.04) leaves(g, px, py, h2, 3)
+      else if (h < 0.06) paper(g, px + 16, py + 16, h2)
+      return
+    }
     if (t === T.SIDEWALK) {
       for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
         const n = near(dx, dy)
@@ -412,7 +463,7 @@ export class Ground {
       else if (h < 0.1) leaves(g, px, py, h2, 5)
       else if (h < 0.115) paper(g, px + 16, py + 16, h2)
     } else if (t === T.ROAD) {
-      const roads = W.roads
+      const roads = W.roads || []
       const hb = roads.find(r => y >= r && y <= r + 2)
       const vb = roads.find(r => x >= r && x <= r + 2)
       if (hb !== undefined && vb === undefined) {
@@ -946,6 +997,136 @@ export function furnSprite(kind, variant) {
         g.stroke()
         break
       }
+      case 'planter': {
+        g.fillStyle = 'rgba(0,0,0,0.3)'
+        ell(g, 18, 21, 13, 8)
+        g.fill()
+        box(g, 3, 6, 26, 22, 7, '#9a9488', '#7a7468')
+        g.fillStyle = '#4a3a2a'
+        g.fillRect(6, 1, 20, 14)
+        const fl = ['#c8486a', '#e0b03a', '#e8e2d0', '#8a5ab0']
+        for (let i = 0; i < 9; i++) {
+          g.fillStyle = i % 3 === 0 ? '#5a8a32' : fl[(v + i) % fl.length]
+          ell(g, 9 + (i % 3) * 7, 4 + Math.floor(i / 3) * 4.5, 2.6, 2.2)
+          g.fill()
+        }
+        break
+      }
+      case 'bench': {
+        box(g, 2, 12, 28, 9, 7, '#9a6c40', '#6e4a2c')
+        g.fillStyle = 'rgba(0,0,0,0.25)'
+        for (let i = 6; i < 30; i += 6) g.fillRect(2, 5 + i * 0, 28, 0)
+        g.fillStyle = '#3a3e44'
+        g.fillRect(4, 21, 2, 4)
+        g.fillRect(26, 21, 2, 4)
+        box(g, 2, 7, 28, 4, 12, '#a87a4c', '#7a5434')
+        break
+      }
+      case 'desk': {
+        box(g, 6, 8, 20, 14, 9, '#c49a64', '#8a6440')
+        g.fillStyle = '#e8e2d0'
+        g.fillRect(9, -1, 8, 6)
+        g.fillStyle = 'rgba(40,40,60,0.5)'
+        g.fillRect(10, 0.5, 6, 0.6)
+        g.fillRect(10, 2, 5, 0.6)
+        g.fillStyle = '#3a3e44'
+        g.fillRect(9, 23, 14, 3)
+        g.fillRect(9, 26, 2, 3)
+        g.fillRect(21, 26, 2, 3)
+        break
+      }
+      case 'blackboard': {
+        box(g, 1, 16, 30, 10, 26, '#4a3a2a', '#5a4632')
+        g.fillStyle = '#24402e'
+        g.fillRect(3, -8, 26, 16)
+        g.strokeStyle = 'rgba(230,230,220,0.7)'
+        g.lineWidth = 0.7
+        g.beginPath()
+        g.moveTo(6, -4)
+        g.lineTo(15, -4)
+        g.moveTo(6, -1)
+        g.lineTo(20, -1)
+        g.moveTo(6, 2)
+        g.lineTo(12, 2)
+        g.moveTo(18, 3)
+        g.lineTo(25, -5)
+        g.stroke()
+        g.fillStyle = '#d8d4c8'
+        g.fillRect(5, 9, 22, 1.5)
+        break
+      }
+      case 'pew': {
+        box(g, 1, 10, 30, 12, 8, '#7a5434', '#5a3c22')
+        box(g, 1, 6, 30, 5, 15, '#6e4a2c', '#4e3420')
+        g.fillStyle = 'rgba(0,0,0,0.25)'
+        g.fillRect(1, 9, 30, 1)
+        break
+      }
+      case 'altar': {
+        box(g, 3, 6, 26, 20, 12, '#ece6d8', '#c9c0ae')
+        g.fillStyle = '#8a2a26'
+        g.fillRect(3, 2, 26, 3)
+        g.fillStyle = '#d8b44a'
+        g.fillRect(15, -6, 2, 10)
+        g.fillRect(12, -3, 8, 2)
+        for (const cx of [7, 25]) {
+          g.fillStyle = '#f2ead8'
+          g.fillRect(cx - 1, -4, 2, 6)
+          g.fillStyle = '#f2b42a'
+          ell(g, cx, -5.5, 1.1, 1.8)
+          g.fill()
+        }
+        break
+      }
+      case 'table': {
+        g.fillStyle = 'rgba(0,0,0,0.25)'
+        ell(g, 18, 20, 12, 9)
+        g.fill()
+        const tg = g.createRadialGradient(13, 8, 2, 16, 12, 14)
+        tg.addColorStop(0, '#b08a5a')
+        tg.addColorStop(1, '#7a5634')
+        g.fillStyle = tg
+        ell(g, 16, 12, 12, 10)
+        g.fill()
+        g.strokeStyle = 'rgba(0,0,0,0.45)'
+        g.lineWidth = 0.8
+        g.stroke()
+        g.fillStyle = '#e8e2d0'
+        ell(g, 12, 10, 3, 2.5)
+        g.fill()
+        g.fillStyle = '#8a3a2a'
+        ell(g, 20, 14, 2, 2)
+        g.fill()
+        break
+      }
+      case 'clothrack': {
+        g.fillStyle = 'rgba(0,0,0,0.25)'
+        g.fillRect(4, 18, 26, 8)
+        g.fillStyle = '#8a8e94'
+        g.fillRect(3, 4, 26, 2)
+        g.fillRect(3, 4, 2, 20)
+        g.fillRect(27, 4, 2, 20)
+        const cols = ['#8a3a32', '#3a5a7a', '#c9b48a', '#2e2e32', '#5a6a3a', '#d8d4cc', '#7a4a6a']
+        for (let i = 0; i < 8; i++) {
+          g.fillStyle = cols[Math.floor(hash(i, v, 41) * cols.length)]
+          g.fillRect(5 + i * 2.8, 6, 2.6, 13 + hash(i, v, 42) * 4)
+        }
+        g.strokeStyle = 'rgba(0,0,0,0.35)'
+        g.lineWidth = 0.6
+        g.strokeRect(5, 6, 22, 16)
+        break
+      }
+      case 'breadrack': {
+        box(g, 1, 8, 30, 18, 16, '#c9a070', '#8a6440')
+        g.fillStyle = 'rgba(200,225,235,0.35)'
+        g.fillRect(2, 10, 28, 10)
+        for (let i = 0; i < 6; i++) {
+          g.fillStyle = i % 2 ? '#c8863a' : '#d89a4a'
+          ell(g, 6 + i * 4.2, -2 + (i % 2) * 3, 2.6, 1.8, 0.3)
+          g.fill()
+        }
+        break
+      }
       default: {
         box(g, 3, 4, 26, 24, 10, '#8a6a4a', '#6a4a32')
       }
@@ -1326,4 +1507,78 @@ export function wallFace(style, base) {
     g.fillStyle = 'rgba(0,0,0,0.25)'
     g.fillRect(0, 0, TS, 1.5)
   })
+}
+
+export const ROOF_COLORS = ['#6b2e2a', '#4a4f57', '#5a4634', '#3f5243', '#6e5a3a', '#38404f', '#7a4a3a', '#8a3a2a']
+
+export function roofTile(style, col, lit, orient, v) {
+  return cached(`rt:${style}:${col}:${lit}:${orient}:${v}`, TS, TS, g => {
+    if (style === 'shingle') {
+      const base = lit ? shade(col, 0.1) : shade(col, -0.24)
+      g.fillStyle = base
+      g.fillRect(0, 0, TS, TS)
+      for (let r = 0; r < 7; r++) {
+        const off = (r + v) % 2 ? 0 : 4
+        for (let c = -1; c < 5; c++) {
+          const n = hash(c + v * 7, r, 71) - 0.5
+          g.fillStyle = n > 0 ? `rgba(255,255,255,${n * 0.12})` : `rgba(0,0,0,${-n * 0.18})`
+          if (orient === 'h') g.fillRect(c * 8 + off, r * 5, 7.4, 4.4)
+          else g.fillRect(r * 5, c * 8 + off, 4.4, 7.4)
+        }
+        g.fillStyle = lit ? 'rgba(0,0,0,0.16)' : 'rgba(0,0,0,0.24)'
+        if (orient === 'h') g.fillRect(0, r * 5 + 4.4, TS, 0.9)
+        else g.fillRect(r * 5 + 4.4, 0, 0.9, TS)
+      }
+      if (hash(v, 3, 72) < 0.25) {
+        g.fillStyle = 'rgba(70,90,50,0.25)'
+        ell(g, 8 + hash(v, 4, 72) * 16, 8 + hash(v, 5, 72) * 16, 4, 3)
+        g.fill()
+      }
+    } else if (style === 'metal') {
+      g.fillStyle = lit ? shade(col, 0.05) : shade(col, -0.15)
+      g.fillRect(0, 0, TS, TS)
+      for (let i = 0; i < TS; i += 4) {
+        g.fillStyle = 'rgba(255,255,255,0.12)'
+        if (orient === 'h') g.fillRect(i, 0, 1.5, TS)
+        else g.fillRect(0, i, TS, 1.5)
+        g.fillStyle = 'rgba(0,0,0,0.18)'
+        if (orient === 'h') g.fillRect(i + 2, 0, 1.5, TS)
+        else g.fillRect(0, i + 2, TS, 1.5)
+      }
+      if (hash(v, 6, 73) < 0.3) {
+        g.fillStyle = `rgba(140,70,30,${0.15 + hash(v, 7, 73) * 0.25})`
+        ell(g, 6 + hash(v, 8, 73) * 20, 6 + hash(v, 9, 73) * 20, 5, 3.5)
+        g.fill()
+      }
+    } else {
+      g.fillStyle = col
+      g.fillRect(0, 0, TS, TS)
+      for (let i = 0; i < 70; i++) {
+        g.fillStyle = hash(i, v, 74) > 0.5 ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.12)'
+        g.fillRect(hash(i, v, 75) * TS, hash(i, v, 76) * TS, 1.1, 1.1)
+      }
+      if (hash(v, 1, 77) < 0.2) {
+        g.fillStyle = 'rgba(30,30,30,0.12)'
+        ell(g, 16, 16, 9 + hash(v, 2, 77) * 4, 6)
+        g.fill()
+      }
+    }
+  })
+}
+
+export function acUnit(g, x, y) {
+  g.fillStyle = 'rgba(0,0,0,0.35)'
+  g.fillRect(x + 3, y + 4, 18, 13)
+  g.fillStyle = '#b8bcbe'
+  g.fillRect(x, y, 18, 13)
+  g.strokeStyle = 'rgba(0,0,0,0.35)'
+  g.lineWidth = 0.7
+  g.strokeRect(x, y, 18, 13)
+  g.beginPath()
+  g.arc(x + 9, y + 6.5, 4.5, 0, Math.PI * 2)
+  g.moveTo(x + 4.5, y + 6.5)
+  g.lineTo(x + 13.5, y + 6.5)
+  g.moveTo(x + 9, y + 2)
+  g.lineTo(x + 9, y + 11)
+  g.stroke()
 }

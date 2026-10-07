@@ -120,6 +120,12 @@ export const LOOT = {
   hardware: [['hammer', 5], ['nails', 8], ['saw', 5], ['axe', 3], ['crowbar', 3], ['shovel', 3], ['seeds', 5], ['flashlight', 4], ['battery', 4], ['bat', 3]],
   police: [['pistol', 3], ['ammo9', 6], ['shotgun', 2], ['shells', 4], ['flashlight', 3], ['bandage', 2], ['bat', 1]],
   corpse: [['ammo9', 1], ['chips', 2], ['lighter', 2], ['cigarettes', 3], ['bandage', 1], ['knife', 1], ['watch', 1], ['water', 1], ['crackers', 1]],
+  school: [['crackers', 3], ['chips', 3], ['soda', 2], ['water', 2], ['magazine', 2], ['book_aid', 1], ['book_carp', 1], ['book_farm', 1], ['bat', 1], ['lighter', 1], ['battery', 1]],
+  church: [['bread', 2], ['water', 3], ['calm', 1], ['lighter', 3], ['sheet', 2], ['bandage', 1], ['magazine', 1]],
+  bakery: [['bread', 8], ['crackers', 3], ['milk', 2], ['peanut', 2], ['soda', 2], ['water', 1]],
+  clothes: [['sheet', 4], ['backpack', 2], ['dufflebag', 2], ['watch', 2], ['rag', 3]],
+  diner: [['soda', 3], ['water', 2], ['chips', 2], ['crackers', 1], ['knife', 1], ['bottle', 2]],
+  office: [['magazine', 3], ['battery', 2], ['flashlight', 1], ['painkillers', 1], ['crackers', 1], ['soda', 1], ['lighter', 1]],
   car: [['water', 3], ['soda', 2], ['chips', 3], ['bandage', 2], ['lighter', 2], ['flashlight', 2], ['battery', 2], ['hammer', 1], ['crowbar', 1], ['magazine', 2], ['backpack', 1], ['cigarettes', 2], ['ammo9', 1], ['bat', 1]],
   shed: [['hammer', 2], ['nails', 3], ['axe', 2], ['shovel', 2], ['seeds', 3], ['saw', 2], ['plank', 3], ['log', 1]]
 }
@@ -146,5 +152,14 @@ export const FURN = {
   crate: { name: 'Caixote', color: '#9a7343', container: true },
   campfire: { name: 'Fogueira', color: '#c25b26', cook: true, fire: true },
   collector: { name: 'Coletor de chuva', color: '#5a7f9a', collector: true },
-  shedbox: { name: 'Caixa do galpão', color: '#7f6a48', loot: 'shed', rolls: [1, 3] }
+  shedbox: { name: 'Caixa do galpão', color: '#7f6a48', loot: 'shed', rolls: [1, 3] },
+  desk: { name: 'Carteira escolar', color: '#b08a5a', loot: 'school', rolls: [0, 1] },
+  blackboard: { name: 'Quadro e armário', color: '#2e4a3a', loot: 'school', rolls: [1, 2] },
+  pew: { name: 'Banco da igreja', color: '#6e4a2c', bed: true, sofa: true },
+  altar: { name: 'Altar', color: '#e6e0d2', loot: 'church', rolls: [1, 3] },
+  table: { name: 'Mesa', color: '#8a6440', loot: 'diner', rolls: [0, 1] },
+  clothrack: { name: 'Arara de roupas', color: '#6a6e74', loot: 'clothes', rolls: [1, 2] },
+  planter: { name: 'Floreira' },
+  bench: { name: 'Banco da praça', bed: true, sofa: true },
+  breadrack: { name: 'Vitrine da padaria', color: '#c9a070', loot: 'bakery', rolls: [2, 4] }
 }

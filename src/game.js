@@ -1,11 +1,20 @@
 import { ITEMS, SKILLS, PROFESSIONS, TRAITS, RECIPES, LOOT, STACK_AMOUNTS, FURN } from './data.js?v=202610070923'
+import { createWorldFromMap, LABELS } from './mapworld.js?v=202610070923'
 import { T, createWorld, rollLoot } from './world.js?v=202610070923'
 import { sfx, unlockAudio, setAmbience, setVolumes, getVolumes } from './audio.js?v=202610070923'
-import { Ground, TS, WALL_H, FURN_LIFT, hash, shade, makeCanvas, furnSprite, treeSprite, carSprite, roofSprite, splatSprite, wallFace } from './gfx.js?v=202610070923'
+import { Ground, TS, WALL_H, FURN_LIFT, hash, shade, makeCanvas, furnSprite, treeSprite, carSprite, splatSprite, wallFace, roofTile, acUnit, ROOF_COLORS } from './gfx.js?v=202610070923'
 import { drawChar, HAIRS, OUTFITS } from './chars.js?v=202610070923'
 import { iconURL } from './icons.js?v=202610070923'
 
-const SAVE_KEY = 'vale-morto-save-v2'
+const SAVE_KEY = 'vale-morto-save-v3'
+let MAPDATA = null
+let mapPromise = null
+function loadMapData() {
+  if (MAPDATA) return Promise.resolve(MAPDATA)
+  if (!mapPromise) mapPromise = fetch('maps/jaragua.json?v=' + MAP_VERSION).then(r => (r.ok ? r.json() : null)).then(d => (MAPDATA = d)).catch(() => null)
+  return mapPromise
+}
+const MAP_VERSION = '1'
 const START_TIME = 9 * 60
 const canvas = document.getElementById('game')
 const ctx = canvas.getContext('2d')
@@ -239,15 +248,8 @@ function clockStr() {
 
 function newState(opts) {
   const seed = opts.seed || Math.floor(Math.random() * 1e9)
-  W = createWorld(seed)
-  for (const k in W.doors) W.doors[k].bars = []
-  for (const k in W.windows) {
-    W.windows[k].bars = []
-    W.windows[k].cleared = false
-  }
+  W = makeWorld(opts.map, seed)
   for (const b of W.buildings) b.alarm = b.type !== 'shed' && b.id !== W.home && Math.random() < 0.07
-  W.woodwalls = {}
-  W.treeHp = {}
   const prof = PROFESSIONS.find(p => p.id === opts.prof)
   const skills = {}
   for (const k in SKILLS) skills[k] = { lvl: prof.skills[k] || 0, xp: 0 }
@@ -256,6 +258,7 @@ function newState(opts) {
   if (opts.traits.includes('weak')) skills.strength.lvl = Math.max(0, skills.strength.lvl - 1)
   S = {
     seed,
+    mapId: opts.map === 'jaragua' && MAPDATA ? 'jaragua' : 'random',
     settings: opts.settings,
     time: START_TIME,
     player: {
@@ -327,14 +330,14 @@ function newState(opts) {
     if (ITEMS[id].kind === 'weapon' && !p.equip) p.equip = it
   }
   spawnInitialZombies()
-  log(`Dia 1. ${p.name}, ${prof.name.toLowerCase()}. A cidade de Vale Morto caiu há poucos dias.`, 'warn')
+  log(S.mapId === 'jaragua' ? `Dia 1. ${p.name}, ${prof.name.toLowerCase()}. Jaraguá do Sul caiu há poucos dias. O centro está tomado.` : `Dia 1. ${p.name}, ${prof.name.toLowerCase()}. A cidade de Vale Morto caiu há poucos dias.`, 'warn')
   log('Pressione H para ver os controles.', '')
 }
 
 function walkable(x, y) {
   if (!inb(x, y)) return false
   const t = tileAt(x, y)
-  return t === T.GRASS || t === T.ROAD || t === T.SIDEWALK || t === T.FLOOR || t === T.PARKING || t === T.DIRT
+  return t === T.GRASS || t === T.ROAD || t === T.SIDEWALK || t === T.FLOOR || t === T.PARKING || t === T.DIRT || t === T.PLAZA
 }
 
 function spawnZombie(x, y) {
@@ -354,14 +357,25 @@ function spawnZombie(x, y) {
   dressZombie(S.zombies[S.zombies.length - 1])
 }
 
+function popTarget() {
+  return Math.round(S.settings.pop * (W.popScale || 1))
+}
+
+function heartBias(x, y) {
+  if (!W.heart) return true
+  const d = Math.hypot(x - W.heart.x, y - W.heart.y)
+  return Math.random() < 0.3 + 0.7 * Math.exp(-d / 160)
+}
+
 function spawnInitialZombies() {
-  const target = S.settings.pop
+  const target = popTarget()
   const p = S.player
   let tries = 0
-  while (S.zombies.length < target && tries++ < 20000) {
+  while (S.zombies.length < target && tries++ < 80000) {
     const cx = randi(4, W.w - 5)
     const cy = randi(4, W.h - 5)
     if (!walkable(cx, cy)) continue
+    if (!heartBias(cx, cy)) continue
     if (dist(cx, cy, p.x, p.y) < 16) continue
     const indoor = W.bld[idx(cx, cy)] >= 0
     if (indoor && W.bld[idx(cx, cy)] === W.home) continue
@@ -385,6 +399,7 @@ function respawn() {
     const y = randi(2, W.h - 3)
     if (!walkable(x, y) || W.bld[idx(x, y)] >= 0) continue
     if (dist(x, y, p.x, p.y) < 38 || S.vis[idx(x, y)]) continue
+    if (!heartBias(x, y)) continue
     spawnZombie(x + 0.5, y + 0.5)
     made++
   }
@@ -436,6 +451,11 @@ function moveEntity(e, dx, dy, r, isZombie) {
   return hit
 }
 
+function specials() {
+  if (!W._sp) W._sp = Object.keys(W.furn).filter(k => W.furn[k].kind === 'campfire' || W.furn[k].kind === 'collector')
+  return W._sp
+}
+
 function surfaceAt(x, y) {
   const k = idx(Math.floor(x), Math.floor(y))
   let t = W.tiles[k]
@@ -443,7 +463,7 @@ function surfaceAt(x, y) {
   if (t === T.WATER) return 'water'
   if (t === T.GRASS || t === T.TREE) return 'grass'
   if (t === T.DIRT) return 'dirt'
-  if (t === T.SIDEWALK) return 'sidewalk'
+  if (t === T.SIDEWALK || t === T.PLAZA) return 'sidewalk'
   if (t === T.ROAD || t === T.PARKING) return 'road'
   if (W.bld[k] >= 0) return W.floor[k] === 1 ? 'tile' : W.floor[k] === 3 ? 'concrete' : 'wood'
   return 'grass'
@@ -476,7 +496,8 @@ function computeFlow() {
   const sx = Math.floor(p.x)
   const sy = Math.floor(p.y)
   const R = 34
-  const q = new Int32Array(W.w * W.h)
+  if (!S.flowQ || S.flowQ.length !== W.w * W.h) S.flowQ = new Int32Array(W.w * W.h)
+  const q = S.flowQ
   let qh = 0
   let qt = 0
   f[idx(sx, sy)] = 0
@@ -1753,7 +1774,8 @@ function craft(r) {
         W.woodwalls[place] = { hp: 120 * (1 + lvl('carpentry') * 0.15), base: W.tiles[place] }
         W.tiles[place] = T.WOODWALL
       } else {
-        W.furn[place] = { kind: r.place, items: r.place === 'crate' ? [] : null, fuel: r.place === 'campfire' ? 240 : 0, water: 0, base: W.tiles[place] }
+        W.furn[place] = { kind: r.place, items: r.place === 'crate' ? [] : null, fuel: r.place === 'campfire' ? 240 : 0, water: 0, base: W.tiles[place], placed: true }
+        W._sp = null
         W.tiles[place] = T.FURN
       }
     }
@@ -1982,7 +2004,7 @@ function updateWorld(dt) {
     r.next = S.time + (r.on ? randi(60, 300) : randi(480, 2400))
     if (r.on && !S.sleeping) log('Começou a chover.', '')
   }
-  for (const k in W.furn) {
+  for (const k of specials()) {
     const f = W.furn[k]
     if (f.kind === 'campfire' && f.fuel > 0) {
       f.fuel -= dt
@@ -2035,7 +2057,7 @@ function updateWorld(dt) {
   S.spawnT += dt
   if (S.spawnT > 60) {
     S.spawnT = 0
-    if (S.zombies.length < S.settings.pop * 0.85) respawn()
+    if (S.zombies.length < popTarget() * 0.85) respawn()
   }
   S.saveT += dt
   if (S.saveT > 240 && !S.sleeping) {
@@ -2075,7 +2097,7 @@ function updateVision() {
       if (opaque(k) && d > 0.2) break
     }
   }
-  for (const k in W.furn) {
+  for (const k of specials()) {
     const f = W.furn[k]
     if (f.kind === 'campfire' && f.fuel > 0) {
       const [fx, fy] = tileCenter(+k)
@@ -2858,40 +2880,128 @@ function drawFog(x0, y0, x1, y1) {
   ctx.drawImage(fogC, fx0 * TS - TS / 2, fy0 * TS - TS / 2 - 6, w * TS, h * TS)
 }
 
-function buildingSeen(b) {
-  for (const [x, y] of [[b.x, b.y], [b.x + b.w - 1, b.y], [b.x, b.y + b.h - 1], [b.x + b.w - 1, b.y + b.h - 1], [b.x + (b.w >> 1), b.y], [b.x + (b.w >> 1), b.y + b.h - 1], [b.x, b.y + (b.h >> 1)], [b.x + b.w - 1, b.y + (b.h >> 1)]]) {
-    if (S.seen[idx(x, y)]) return true
-  }
-  return false
-}
+const ROOF_STYLE = { house: 'shingle', apartments: 'flat', shed: 'metal', industrial: 'metal', church: 'shingle' }
+const FLAT_COLS = ['#8d8b84', '#7f8186', '#94908a', '#85827a']
 
-function buildingVisible(b) {
-  for (let x = b.x; x < b.x + b.w; x++) if (S.vis[idx(x, b.y)] || S.vis[idx(x, b.y + b.h - 1)]) return true
-  for (let y = b.y; y < b.y + b.h; y++) if (S.vis[idx(b.x, y)] || S.vis[idx(b.x + b.w - 1, y)]) return true
-  return false
+function roofLook(b) {
+  if (b.roof) return b.roof
+  let style = ROOF_STYLE[b.type] || 'flat'
+  let col
+  if (style === 'shingle') col = b.type === 'church' ? '#4a4f57' : ROOF_COLORS[Math.floor(hash(b.id, 0, 61) * ROOF_COLORS.length)]
+  else if (style === 'metal') col = hash(b.id, 1, 62) < 0.5 ? '#7d8286' : '#8a7a6a'
+  else col = b.type === 'police' ? '#7a7f86' : FLAT_COLS[Math.floor(hash(b.id, 2, 63) * FLAT_COLS.length)]
+  const orient = b.w >= b.h ? 'h' : 'v'
+  let sx = 0
+  let sy = 0
+  let n = 0
+  for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) if (W.bld[idx(x, y)] === b.id) {
+    sx += x + 0.5
+    sy += y + 0.5
+    n++
+  }
+  b.roof = { style, col, orient, cx: n ? sx / n : b.x + b.w / 2, cy: n ? sy / n : b.y + b.h / 2 }
+  return b.roof
 }
 
 function drawRoofs(x0, y0, x1, y1) {
-  const p = S.player
   const inside = playerBuilding()
+  const H = WALL_H
   for (const b of W.buildings) {
     if (b.x > x1 + 1 || b.y > y1 + 2 || b.x + b.w < x0 - 1 || b.y + b.h < y0 - 1) continue
-    if (!buildingSeen(b)) continue
+    const bx0 = Math.max(b.x, x0 - 1)
+    const by0 = Math.max(b.y, y0 - 1)
+    const bx1 = Math.min(b.x + b.w - 1, x1 + 1)
+    const by1 = Math.min(b.y + b.h - 1, y1 + 2)
+    let vis = false
+    {
+      for (let y = b.y; y < b.y + b.h && !(b.wasSeen && vis); y++) for (let x = b.x; x < b.x + b.w; x++) {
+        const k = idx(x, y)
+        if (W.bld[k] !== b.id) continue
+        if (S.vis[k]) {
+          vis = true
+          b.wasSeen = true
+          break
+        }
+        if (S.seen[k]) b.wasSeen = true
+      }
+    }
+    if (!b.wasSeen) continue
     const target = b.id === inside ? 0 : 1
     const cur = roofFade[b.id] ?? target
     const a = cur + (target - cur) * 0.18
     roofFade[b.id] = a
     if (a < 0.02) continue
-    const sp = roofSprite(b)
-    const rx = b.x * TS - 5
-    const ry = b.y * TS - WALL_H - 5
-    const w = b.w * TS + 10
-    const h = b.h * TS + 10
+    const L = roofLook(b)
+    ctx.globalAlpha = a * 0.4
+    ctx.fillStyle = '#000'
+    for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) {
+      if (W.bld[idx(x, y)] !== b.id) continue
+      const e = !inb(x + 1, y) || W.bld[idx(x + 1, y)] !== b.id
+      const s = !inb(x, y + 1) || W.bld[idx(x, y + 1)] !== b.id
+      if (e) ctx.fillRect(x * TS + TS, y * TS - H + 6, 7, TS)
+      if (s) ctx.fillRect(x * TS + 4, y * TS - H + TS, TS, 9)
+    }
     ctx.globalAlpha = a
-    ctx.drawImage(sp, rx, ry, w, h)
-    if (!buildingVisible(b)) {
-      ctx.fillStyle = 'rgba(5,7,11,0.5)'
-      ctx.fillRect(rx, ry, w, h)
+    for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) {
+      const k = idx(x, y)
+      if (W.bld[k] !== b.id) continue
+      const v = Math.floor(hash(x, y, 81) * 6)
+      const lit = L.orient === 'h' ? y + 0.5 < L.cy : x + 0.5 < L.cx
+      const px = x * TS
+      const py = y * TS - H
+      ctx.drawImage(roofTile(L.style, L.col, L.style === 'flat' ? true : lit, L.orient, v), px, py, TS + 0.6, TS + 0.6)
+      if (L.style === 'shingle') {
+        const d = L.orient === 'h' ? y + 0.5 - L.cy : x + 0.5 - L.cx
+        if (Math.abs(d) < 0.5) {
+          ctx.fillStyle = shade(L.col, 0.3)
+          if (L.orient === 'h') ctx.fillRect(px, py + TS / 2 + d * TS - 2, TS + 0.6, 4)
+          else ctx.fillRect(px + TS / 2 + d * TS - 2, py, 4, TS + 0.6)
+        }
+      } else if (L.style === 'flat' && hash(x, y, 82) < 0.03 && W.bld[idx(x + 1, y)] === b.id && W.bld[idx(x, y + 1)] === b.id) acUnit(ctx, px + 4, py + 6)
+      const n = !inb(x, y - 1) || W.bld[idx(x, y - 1)] !== b.id
+      const w = !inb(x - 1, y) || W.bld[idx(x - 1, y)] !== b.id
+      const e = !inb(x + 1, y) || W.bld[idx(x + 1, y)] !== b.id
+      const s = !inb(x, y + 1) || W.bld[idx(x, y + 1)] !== b.id
+      if (L.style === 'flat') {
+        ctx.fillStyle = 'rgba(210,206,196,0.9)'
+        if (n) ctx.fillRect(px, py, TS, 3)
+        if (w) ctx.fillRect(px, py, 3, TS)
+        if (e) ctx.fillRect(px + TS - 3, py, 3, TS)
+        if (s) ctx.fillRect(px, py + TS - 3, TS, 3)
+      }
+      ctx.fillStyle = 'rgba(0,0,0,0.5)'
+      if (n) ctx.fillRect(px, py, TS, 1.2)
+      if (w) ctx.fillRect(px, py, 1.2, TS)
+      if (e) ctx.fillRect(px + TS - 1.2, py, 1.2, TS)
+      if (s) ctx.fillRect(px, py + TS - 1.2, TS, 1.2)
+    }
+    if (b.type === 'church') {
+      const cx = L.cx * TS
+      const cy = L.cy * TS - H
+      ctx.fillStyle = 'rgba(0,0,0,0.35)'
+      ctx.fillRect(cx - 3 + 4, cy - 22 + 5, 6, 44)
+      ctx.fillRect(cx - 14 + 4, cy - 10 + 5, 28, 6)
+      ctx.fillStyle = '#d8d2c2'
+      ctx.fillRect(cx - 3, cy - 22, 6, 44)
+      ctx.fillRect(cx - 14, cy - 10, 28, 6)
+    }
+    const label = LABELS[b.type]
+    if (label && b.w >= 9 && b.h >= 6) {
+      const size = Math.min(30, Math.max(14, Math.min(b.w, b.h) * 2.4))
+      ctx.font = `bold ${size}px "IBM Plex Mono", monospace`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillStyle = 'rgba(30,28,24,0.35)'
+      ctx.fillText(label, L.cx * TS + 2, L.cy * TS - H + 2)
+      ctx.fillStyle = 'rgba(240,236,224,0.7)'
+      ctx.fillText(label, L.cx * TS, L.cy * TS - H)
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'alphabetic'
+    }
+    if (!vis) {
+      ctx.globalAlpha = a * 0.5
+      ctx.fillStyle = 'rgb(5,7,11)'
+      for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) if (W.bld[idx(x, y)] === b.id) ctx.fillRect(x * TS, y * TS - H, TS + 0.6, TS + 0.6)
     }
     ctx.globalAlpha = 1
   }
@@ -2937,7 +3047,7 @@ function drawTargetMark() {
 function ambientParticles(dt) {
   if (S.sleeping) return
   const p = S.player
-  for (const k in W.furn) {
+  for (const k of specials()) {
     const f = W.furn[k]
     if (f.kind !== 'campfire' || f.fuel <= 0) continue
     const [fx, fy] = tileCenter(+k)
@@ -3133,7 +3243,7 @@ function lightList() {
   const L = []
   const night = isNight()
   const power = !S.powerOff
-  for (const k in W.furn) {
+  for (const k of specials()) {
     const f = W.furn[k]
     if (f.kind === 'campfire' && f.fuel > 0) {
       const [fx, fy] = tileCenter(+k)
@@ -3495,7 +3605,7 @@ function renderMinimap(dt) {
   const ox = Math.floor(p.x) - N / 2
   const oy = Math.floor(p.y) - N / 2
   if (!MINI_COL.ok) {
-    Object.assign(MINI_COL, { [T.GRASS]: '#3a4a2c', [T.TREE]: '#24331e', [T.ROAD]: '#2a2b2e', [T.SIDEWALK]: '#5c5952', [T.PARKING]: '#333438', [T.WATER]: '#2a4a60', [T.DIRT]: '#5a4430', [T.FLOOR]: '#7a6650', [T.FURN]: '#6a5a46', [T.WALL]: '#c8bca8', [T.WINDOW]: '#8ab0c8', [T.DOOR]: '#a07a4a', [T.WOODWALL]: '#a07c4e', [T.CAR]: '#8a7a6a', ok: true })
+    Object.assign(MINI_COL, { [T.GRASS]: '#3a4a2c', [T.TREE]: '#24331e', [T.ROAD]: '#2a2b2e', [T.SIDEWALK]: '#5c5952', [T.PARKING]: '#333438', [T.WATER]: '#2a4a60', [T.DIRT]: '#5a4430', [T.FLOOR]: '#7a6650', [T.FURN]: '#6a5a46', [T.WALL]: '#c8bca8', [T.WINDOW]: '#8ab0c8', [T.DOOR]: '#a07a4a', [T.WOODWALL]: '#a07c4e', [T.CAR]: '#8a7a6a', [T.PLAZA]: '#8a8072', ok: true })
   }
   g.fillStyle = '#07090c'
   g.fillRect(0, 0, c.width, c.height)
@@ -3613,6 +3723,42 @@ function drawMarkers(now) {
   }
 }
 
+const PLACE_NAMES = { house: 'Casa', apartments: 'Prédio residencial', shed: 'Galpão', store: 'Loja', market: 'Mercado', pharmacy: 'Farmácia', hardware: 'Ferragens', police: 'Delegacia', clinic: 'Posto de saúde', school: 'Colégio', church: 'Igreja', mall: 'Shopping', bakery: 'Padaria', restaurant: 'Lanchonete', office: 'Escritório', industrial: 'Galpão industrial', fuel: 'Posto de gasolina' }
+let placeT = 0
+function placeName() {
+  const p = S.player
+  const bi = playerBuilding()
+  let inside = ''
+  if (bi >= 0) inside = bi === W.home ? 'Sua casa' : PLACE_NAMES[W.buildings[bi].type] || ''
+  let street = ''
+  if (W.labels && W.labels.length) {
+    let best = 14
+    for (const l of W.labels) {
+      const pts = l.p
+      for (let i = 0; i + 3 < pts.length; i += 2) {
+        const ax = pts[i]
+        const ay = pts[i + 1]
+        const bx = pts[i + 2]
+        const by = pts[i + 3]
+        if (Math.min(ax, bx) - best > p.x || Math.max(ax, bx) + best < p.x || Math.min(ay, by) - best > p.y || Math.max(ay, by) + best < p.y) continue
+        const dx = bx - ax
+        const dy = by - ay
+        const L = dx * dx + dy * dy || 1
+        const t = clamp(((p.x - ax) * dx + (p.y - ay) * dy) / L, 0, 1)
+        const dd = Math.hypot(ax + t * dx - p.x, ay + t * dy - p.y)
+        if (dd < best) {
+          best = dd
+          street = l.n
+        }
+      }
+    }
+  }
+  if (inside && street) return `<b>${inside}</b><em>${street}</em>`
+  if (inside) return `<b>${inside}</b>`
+  if (street) return `<b>${street}</b>`
+  return ''
+}
+
 function renderHud(force) {
   if (!S) return
   const p = S.player
@@ -3621,6 +3767,11 @@ function renderHud(force) {
   $('hpbar').style.width = `${st.health}%`
   $('hpbar').className = st.health < 35 ? 'low' : ''
   $('stbar').style.width = `${st.stamina}%`
+  placeT -= 0.15
+  if (placeT <= 0 || force) {
+    placeT = 1
+    $('place').innerHTML = placeName()
+  }
   $('moodles').innerHTML = moodles().map(([n, c]) => `<span class="${c}">${n}</span>`).join('')
   const { item, def } = currentWeapon()
   let eq = `<b>${def.name}</b>`
@@ -3639,65 +3790,180 @@ function renderHud(force) {
   }
 }
 
+const MAP_COL = {}
+function mapColors() {
+  if (MAP_COL.ok) return MAP_COL
+  const hex = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]
+  const c = { [T.CAR]: '#7a6a5a', [T.GRASS]: '#33402a', [T.ROAD]: '#25262a', [T.SIDEWALK]: '#5c5952', [T.FLOOR]: '#6a5a48', [T.WALL]: '#a89c8a', [T.DOOR]: '#8a6a42', [T.WINDOW]: '#7aa0b8', [T.TREE]: '#1f2e1a', [T.WATER]: '#2a4a60', [T.FURN]: '#6a5a48', [T.DIRT]: '#5a4430', [T.WOODWALL]: '#a07c4e', [T.PARKING]: '#333438', [T.PLAZA]: '#8a8072' }
+  for (const k in c) MAP_COL[k] = hex(c[k])
+  MAP_COL.ok = true
+  return MAP_COL
+}
+
 function drawMap() {
   const c = $('mapcanvas')
-  const s = Math.floor(Math.min(window.innerWidth, window.innerHeight) * 0.8 / W.w)
-  c.width = W.w * s
-  c.height = W.h * s
+  const col = mapColors()
+  const box = Math.min(window.innerWidth * 0.8, window.innerHeight * 0.72)
+  const sc = box / Math.max(W.w, W.h)
+  const dpr = Math.min(window.devicePixelRatio || 1, 2)
+  c.width = Math.round(W.w * sc * dpr)
+  c.height = Math.round(W.h * sc * dpr)
+  c.style.width = W.w * sc + 'px'
+  c.style.height = W.h * sc + 'px'
+  const off = makeCanvas(W.w, W.h)
+  const om = off.getContext('2d')
+  const img = om.createImageData(W.w, W.h)
+  const d = img.data
+  for (let k = 0; k < W.tiles.length; k++) {
+    const o = k * 4
+    if (!S.seen[k]) {
+      d[o] = 10
+      d[o + 1] = 12
+      d[o + 2] = 16
+      d[o + 3] = 255
+      continue
+    }
+    let t = W.tiles[k]
+    if (W.bld[k] >= 0 && (t === T.FLOOR || t === T.FURN)) t = T.FLOOR
+    const cc = col[t] || [60, 60, 60]
+    d[o] = cc[0]
+    d[o + 1] = cc[1]
+    d[o + 2] = cc[2]
+    d[o + 3] = 255
+  }
+  om.putImageData(img, 0, 0)
   const m = c.getContext('2d')
-  m.fillStyle = '#0a0c10'
-  m.fillRect(0, 0, c.width, c.height)
-  const col = {
-    [T.CAR]: '#7a6a5a', [T.GRASS]: '#33402a', [T.ROAD]: '#25262a', [T.SIDEWALK]: '#55534d', [T.FLOOR]: '#6a5a48', [T.WALL]: '#a09484', [T.DOOR]: '#8a6a42', [T.WINDOW]: '#7aa0b8', [T.TREE]: '#1f2e1a', [T.WATER]: '#2a4a60', [T.FURN]: '#6a5a48', [T.DIRT]: '#5a4430', [T.WOODWALL]: '#a07c4e', [T.PARKING]: '#333438'
-  }
-  for (let y = 0; y < W.h; y++) for (let x = 0; x < W.w; x++) {
-    const k = idx(x, y)
-    if (!S.seen[k]) continue
-    m.fillStyle = col[W.tiles[k]] || '#333'
-    m.fillRect(x * s, y * s, s, s)
-  }
+  m.imageSmoothingEnabled = sc < 1
+  m.setTransform(1, 0, 0, 1, 0, 0)
+  m.drawImage(off, 0, 0, c.width, c.height)
+  const kk = c.width / W.w
+  m.setTransform(kk, 0, 0, kk, 0, 0)
+  const u = dpr / kk
   m.fillStyle = '#f0d070'
   m.beginPath()
-  m.arc(S.player.x * s, S.player.y * s, Math.max(3, s), 0, Math.PI * 2)
+  m.arc(S.player.x, S.player.y, 4 * u, 0, Math.PI * 2)
   m.fill()
   const hb = W.buildings[W.home]
   m.strokeStyle = '#f0d070'
-  m.strokeRect(hb.x * s, hb.y * s, hb.w * s, hb.h * s)
-  m.font = '12px "IBM Plex Mono", monospace'
+  m.lineWidth = 1.5 * u
+  m.strokeRect(hb.x, hb.y, hb.w, hb.h)
+  m.font = `${12 * u}px "IBM Plex Mono", monospace`
   m.fillStyle = '#f0d070'
-  m.fillText('casa', hb.x * s, hb.y * s - 4)
-  const names = { market: 'Mercado', pharmacy: 'Farmácia', hardware: 'Ferragens', police: 'Delegacia' }
+  m.fillText('casa', hb.x, hb.y - 4 * u)
+  const names = { market: 'Mercado', pharmacy: 'Farmácia', hardware: 'Ferragens', police: 'Delegacia', school: 'Colégio', church: 'Igreja', mall: 'Shopping', clinic: 'Saúde', bakery: 'Padaria', fuel: 'Posto' }
+  m.fillStyle = '#e8e0d0'
+  m.textAlign = 'center'
   for (const b of W.buildings) {
-    if (!names[b.type]) continue
-    if (!S.seen[idx(b.x + 1, b.y + 1)] && !S.seen[idx(b.x, b.y)]) continue
-    m.fillStyle = '#e8e0d0'
-    m.fillText(names[b.type], b.x * s + 4, b.y * s + 14)
+    if (!names[b.type] || !b.wasSeen) continue
+    const L = roofLook(b)
+    m.fillText(names[b.type], L.cx, L.cy)
   }
+  if (W.labels && W.labels.length) {
+    m.font = `${10 * u}px "IBM Plex Mono", monospace`
+    m.fillStyle = 'rgba(232,224,208,0.75)'
+    const done = new Set()
+    for (const l of W.labels) {
+      if (done.has(l.n) || l.p.length < 4) continue
+      const i = Math.floor(l.p.length / 4) * 2
+      const x = l.p[i]
+      const y = l.p[i + 1]
+      if (!S.seen[idx(Math.floor(clamp(x, 0, W.w - 1)), Math.floor(clamp(y, 0, W.h - 1)))]) continue
+      done.add(l.n)
+      const ang = Math.atan2(l.p[i + 3] - l.p[i + 1], l.p[i + 2] - l.p[i])
+      m.save()
+      m.translate(x, y)
+      m.rotate(Math.abs(ang) > Math.PI / 2 ? ang + Math.PI : ang)
+      m.fillText(l.n, 0, -2 * u)
+      m.restore()
+    }
+  }
+  m.textAlign = 'left'
+  if (W.credit) $('mapcredit').textContent = W.credit
+}
+
+function b64(u) {
+  let s = ''
+  for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000))
+  return btoa(s)
+}
+
+function unb64(s) {
+  const bin = atob(s)
+  const u = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i)
+  return u
+}
+
+function packBits(arr) {
+  const out = new Uint8Array(Math.ceil(arr.length / 8))
+  for (let i = 0; i < arr.length; i++) if (arr[i]) out[i >> 3] |= 1 << (i & 7)
+  return b64(out)
+}
+
+function unpackBits(s, n) {
+  const u = unb64(s)
+  const out = new Uint8Array(n)
+  for (let i = 0; i < n; i++) out[i] = (u[i >> 3] >> (i & 7)) & 1
+  return out
+}
+
+const ZF = ['x', 'y', 'hp', 'mhp', 'spd', 'dir', 'shirt', 'skin', 'pants', 'hair', 'hc', 'gore', 'missingArm', 'pose']
+const OUTF = ['tshirt', 'jacket', 'hoodie', 'police', 'medic', 'worker', 'suit', 'tank', 'flannel', 'dress']
+function packZ(z) {
+  const a = ZF.map(f => (typeof z[f] === 'number' ? Math.round(z[f] * 100) / 100 : 0))
+  a.push(z.sprinter ? 1 : 0, z.fem ? 1 : 0, Math.max(0, OUTF.indexOf(z.outfit)), z.st === 'idle' ? 0 : 1)
+  return a
+}
+function unpackZ(a) {
+  const z = { st: 'idle', mem: 0, cd: 0, stun: 0, down: 0, wt: rand(0, 6), bashT: 0, groan: rand(3, 15), hit: 0, phase: rand(0, 6) }
+  ZF.forEach((f, i) => (z[f] = a[i]))
+  z.sprinter = !!a[ZF.length]
+  z.fem = !!a[ZF.length + 1]
+  z.outfit = OUTF[a[ZF.length + 2]] || 'tshirt'
+  z.tx = z.x
+  z.ty = z.y
+  z.lx = z.x
+  z.ly = z.y
+  return z
 }
 
 function serialize() {
   const p = S.player
-  const enc = arr => {
-    let s = ''
-    const u = new Uint8Array(arr.buffer)
-    for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000))
-    return btoa(s)
+  const tiles = []
+  for (let k = 0; k < W.tiles.length; k++) if (W.tiles[k] !== W.pristine[k]) tiles.push(k, W.tiles[k])
+  const doors = {}
+  for (const k in W.doors) {
+    const d = W.doors[k]
+    const o = W.orig.doors[k]
+    if (!o || d.open !== o[0] || d.locked !== o[1] || d.hp !== o[2] || d.broken || d.bars.length) doors[k] = d
+  }
+  const windows = {}
+  for (const k in W.windows) {
+    const w = W.windows[k]
+    const o = W.orig.windows[k]
+    if (!o || w.state !== o[0] || w.hp !== o[1] || w.bars.length || w.cleared) windows[k] = w
+  }
+  const furn = {}
+  for (const k in W.furn) {
+    const f = W.furn[k]
+    if (f.items !== null || f.placed || f.fuel || f.water) furn[k] = f
   }
   const data = {
-    v: 1,
+    v: 3,
     seed: S.seed,
-    tiles: enc(W.tiles),
-    seen: enc(S.seen),
-    doors: W.doors,
-    windows: W.windows,
-    furn: W.furn,
+    mapId: S.mapId || 'random',
+    tiles,
+    seen: packBits(S.seen),
+    doors,
+    windows,
+    furn,
     plots: W.plots,
     woodwalls: W.woodwalls,
     treeHp: W.treeHp,
     alarms: W.buildings.map(b => b.alarm ? 1 : 0),
     cars: W.cars.map(c => c.items),
     S: {
-      settings: S.settings, time: S.time, zombies: S.zombies.map(z => ({ ...z, hit: 0 })), corpses: S.corpses.slice(-150), ground: S.ground,
+      settings: S.settings, time: S.time, zombies: S.zombies.map(packZ), corpses: S.corpses.slice(-150), ground: S.ground,
       blood: S.blood.filter(b => b.r >= 0.1).slice(-250), kills: S.kills, powerOff: S.powerOff, waterOff: S.waterOff, powerOffAt: S.powerOffAt, waterOffAt: S.waterOffAt,
       heli: S.heli, rain: S.rain, alarms: S.alarms,
       player: { ...p, action: null, equipIdx: p.inv.indexOf(p.equip), equip: null, hot: null, hotIdx: (p.hot || []).map(h => p.inv.indexOf(h)) }
@@ -3715,33 +3981,49 @@ function save() {
   }
 }
 
+function makeWorld(mapId, seed) {
+  const w = mapId === 'jaragua' && MAPDATA ? createWorldFromMap(MAPDATA, seed) : createWorld(seed)
+  for (const k in w.doors) if (!w.doors[k].bars) w.doors[k].bars = []
+  for (const k in w.windows) {
+    if (!w.windows[k].bars) w.windows[k].bars = []
+    w.windows[k].cleared = false
+  }
+  w.woodwalls = {}
+  w.treeHp = {}
+  w.labels = mapId === 'jaragua' && MAPDATA ? MAPDATA.labels || [] : []
+  w.pristine = w.tiles.slice()
+  w.orig = { doors: {}, windows: {} }
+  for (const k in w.doors) w.orig.doors[k] = [w.doors[k].open, w.doors[k].locked, w.doors[k].hp]
+  for (const k in w.windows) w.orig.windows[k] = [w.windows[k].state, w.windows[k].hp]
+  return w
+}
+
 function load() {
   const raw = localStorage.getItem(SAVE_KEY)
   if (!raw) return false
   const data = JSON.parse(raw)
-  W = createWorld(data.seed)
-  const dec = (s, Ctor) => {
-    const bin = atob(s)
-    const u = new Uint8Array(bin.length)
-    for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i)
-    return new Ctor(u.buffer)
-  }
-  W.tiles = dec(data.tiles, Uint8Array)
-  W.doors = data.doors
-  W.windows = data.windows
-  W.furn = data.furn
+  if (data.mapId === 'jaragua' && !MAPDATA) throw new Error('map')
+  W = makeWorld(data.mapId, data.seed)
+  for (let i = 0; i < data.tiles.length; i += 2) W.tiles[data.tiles[i]] = data.tiles[i + 1]
+  Object.assign(W.doors, data.doors)
+  Object.assign(W.windows, data.windows)
+  for (const k in data.furn) W.furn[k] = data.furn[k]
+  for (const k in W.furn) if (W.tiles[k] !== T.FURN) delete W.furn[k]
   W.plots = data.plots
   W.woodwalls = data.woodwalls || {}
   W.treeHp = data.treeHp || {}
+  W._sp = null
   W.buildings.forEach((b, i) => (b.alarm = !!data.alarms[i]))
   if (data.cars) W.cars.forEach((c, i) => (c.items = data.cars[i] || null))
   const d = data.S
+  d.zombies = d.zombies.map(z => (Array.isArray(z) ? unpackZ(z) : z))
   S = {
     ...d,
     seed: data.seed,
+    mapId: data.mapId,
     noises: [], rings: [], tracers: [], flashes: [], log: [],
     vis: new Uint8Array(W.w * W.h),
-    seen: dec(data.seen, Uint8Array),
+    seen: unpackBits(data.seen, W.w * W.h),
     flow: new Int16Array(W.w * W.h),
     flowT: 0, spawnT: 0, saveT: 0, sleeping: false, over: false
   }
@@ -3768,6 +4050,7 @@ function startGame() {
 
 function showMenu() {
   S = null
+  loadMapData()
   $('hud').classList.add('hidden')
   closeAllScreens()
   const has = !!localStorage.getItem(SAVE_KEY)
@@ -3784,16 +4067,27 @@ function showMenu() {
       </div>
       <p class="small">Teclado e mouse · o progresso é salvo neste navegador · a morte é permanente</p>
     </div>`
-  if (has) $('cont').onclick = () => {
+  if (has) $('cont').onclick = async () => {
     unlockAudio()
+    $('cont').textContent = 'Carregando...'
+    await loadMapData()
     try {
       if (load()) startGame()
     } catch (e) {
+      if (e.message === 'map') {
+        $('cont').textContent = 'Mapa indisponível, tente de novo'
+        return
+      }
       localStorage.removeItem(SAVE_KEY)
       showMenu()
     }
   }
-  $('new').onclick = () => { unlockAudio(); showCreator() }
+  $('new').onclick = async () => {
+    unlockAudio()
+    $('new').textContent = 'Carregando mapa...'
+    await loadMapData()
+    showCreator()
+  }
   $('helpbtn').onclick = () => toggleHelp(true)
 }
 
@@ -3830,6 +4124,7 @@ function showCreator() {
           </section>
           <section>
             <h3>Regras do mundo</h3>
+            <label>Cidade<select id="smap">${MAPDATA ? '<option value="jaragua" selected>Jaraguá do Sul — Centro (mapa real)</option>' : ''}<option value="random">Cidade aleatória (Vale Morto)</option></select></label>
             <label>População de zumbis<select id="spop"><option value="140">Baixa</option><option value="260" selected>Normal</option><option value="420">Alta</option><option value="650">Insana</option></select></label>
             <label>Velocidade dos zumbis<select id="sspeed"><option value="slow" selected>Arrastados</option><option value="mixed">Mistos (alguns correm)</option><option value="fast">Corredores</option></select></label>
             <label>Infecção<select id="sinf"><option value="1" selected>Mordidas e arranhões infectam</option><option value="0">Desligada</option></select></label>
@@ -3888,6 +4183,7 @@ function showCreator() {
         prof: sel.prof,
         traits: sel.traits,
         look: sel.look,
+        map: $('smap').value,
         seed: seed || undefined,
         settings: {
           pop: +$('spop').value,

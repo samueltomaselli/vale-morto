@@ -1,5 +1,5 @@
 export const T = {
-  GRASS: 0, ROAD: 1, SIDEWALK: 2, FLOOR: 3, WALL: 4, DOOR: 5, WINDOW: 6, TREE: 7, WATER: 8, FURN: 9, DIRT: 10, WOODWALL: 11, PARKING: 12, CAR: 13
+  GRASS: 0, ROAD: 1, SIDEWALK: 2, FLOOR: 3, WALL: 4, DOOR: 5, WINDOW: 6, TREE: 7, WATER: 8, FURN: 9, DIRT: 10, WOODWALL: 11, PARKING: 12, CAR: 13, PLAZA: 14
 }
 
 export const CAR_COLORS = ['#8a2f2a', '#2f4f7a', '#c9c3b5', '#3c3f44', '#5d6e4a', '#a7742f', '#6b2f5a', '#e0ddd5', '#2a5a5a']
