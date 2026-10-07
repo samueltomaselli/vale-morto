@@ -1,6 +1,8 @@
 export const T = {
-  GRASS: 0, ROAD: 1, SIDEWALK: 2, FLOOR: 3, WALL: 4, DOOR: 5, WINDOW: 6, TREE: 7, WATER: 8, FURN: 9, DIRT: 10, WOODWALL: 11, PARKING: 12
+  GRASS: 0, ROAD: 1, SIDEWALK: 2, FLOOR: 3, WALL: 4, DOOR: 5, WINDOW: 6, TREE: 7, WATER: 8, FURN: 9, DIRT: 10, WOODWALL: 11, PARKING: 12, CAR: 13
 }
+
+export const CAR_COLORS = ['#8a2f2a', '#2f4f7a', '#c9c3b5', '#3c3f44', '#5d6e4a', '#a7742f', '#6b2f5a', '#e0ddd5', '#2a5a5a']
 
 export function mulberry32(a) {
   return function () {
@@ -368,6 +370,47 @@ export function createWorld(seed, size = 128) {
       if (nearBuilding) continue
       if (edge < 8 && rng() < 0.55 - edge * 0.04) set(x, y, T.TREE)
       else if (rng() < 0.025) set(x, y, T.TREE)
+    }
+  }
+
+  world.roads = roads
+  world.cars = []
+  world.carAt = {}
+  world.carBase = {}
+  const roadBand = r => (k => roads.some(rr => k >= rr && k <= rr + 2))(r)
+  const freeRoad = (x, y) => get(x, y) === T.ROAD
+  function placeCar(x, y, horiz) {
+    const x2 = horiz ? x + 1 : x
+    const y2 = horiz ? y : y + 1
+    if (!freeRoad(x, y) && get(x, y) !== T.PARKING) return false
+    if (!freeRoad(x2, y2) && get(x2, y2) !== T.PARKING) return false
+    for (let yy = y - 1; yy <= y2 + 1; yy++) for (let xx = x - 1; xx <= x2 + 1; xx++) if (get(xx, yy) === T.CAR) return false
+    const id = world.cars.length
+    world.cars.push({ x, y, horiz, color: Math.floor(rng() * CAR_COLORS.length), wreck: rng() < 0.35, items: null, rot: (rng() - 0.5) * 0.12 })
+    for (const [cx, cy] of [[x, y], [x2, y2]]) {
+      world.carBase[idx(cx, cy)] = get(cx, cy)
+      set(cx, cy, T.CAR)
+      world.carAt[idx(cx, cy)] = id
+    }
+    return true
+  }
+  for (const r of roads) {
+    for (let t = lo + 2; t < hi - 2; t++) {
+      if (roadBand(t) || roadBand(t + 1)) continue
+      if (rng() < 0.06) placeCar(t, r + (rng() < 0.5 ? 0 : 2), true)
+      if (rng() < 0.06) placeCar(r + (rng() < 0.5 ? 0 : 2), t, false)
+    }
+  }
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (get(x, y) === T.PARKING && get(x, y + 1) === T.PARKING && x % 3 === 1 && rng() < 0.12) placeCar(x, y, false)
+  }
+  world.lamps = []
+  for (const r of roads) {
+    for (let t = lo; t <= hi; t++) {
+      if (t % 11 === 5 && get(t, r - 1) === T.SIDEWALK) world.lamps.push({ x: t + 0.5, y: r - 1 + 0.5 })
+      if (t % 11 === 0 && get(t, r + 3) === T.SIDEWALK) world.lamps.push({ x: t + 0.5, y: r + 3 + 0.5 })
+      if (t % 11 === 5 && get(r - 1, t) === T.SIDEWALK) world.lamps.push({ x: r - 1 + 0.5, y: t + 0.5 })
+      if (t % 11 === 0 && get(r + 3, t) === T.SIDEWALK) world.lamps.push({ x: r + 3 + 0.5, y: t + 0.5 })
     }
   }
 

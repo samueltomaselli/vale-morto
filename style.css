@@ -335,3 +335,10 @@ em { font-style: normal; color: var(--muted); font-size: 11px; }
   .creator section { max-height: none; }
   #container { right: 14px; }
 }
+
+.looks { display: grid; gap: 7px; margin-bottom: 8px; }
+.looks > div { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.looks span { width: 52px; color: var(--muted); font-size: 11px; }
+.looks .sw { width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 2px solid transparent; box-shadow: 0 0 0 1px var(--line2); }
+.looks .sw.on { border-color: var(--accent); }
+.looks button.on:not(.sw) { border-color: var(--accent); color: var(--accent); }

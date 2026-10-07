@@ -120,6 +120,7 @@ export const LOOT = {
   hardware: [['hammer', 5], ['nails', 8], ['saw', 5], ['axe', 3], ['crowbar', 3], ['shovel', 3], ['seeds', 5], ['flashlight', 4], ['battery', 4], ['bat', 3]],
   police: [['pistol', 3], ['ammo9', 6], ['shotgun', 2], ['shells', 4], ['flashlight', 3], ['bandage', 2], ['bat', 1]],
   corpse: [['ammo9', 1], ['chips', 2], ['lighter', 2], ['cigarettes', 3], ['bandage', 1], ['knife', 1], ['watch', 1], ['water', 1], ['crackers', 1]],
+  car: [['water', 3], ['soda', 2], ['chips', 3], ['bandage', 2], ['lighter', 2], ['flashlight', 2], ['battery', 2], ['hammer', 1], ['crowbar', 1], ['magazine', 2], ['backpack', 1], ['cigarettes', 2], ['ammo9', 1], ['bat', 1]],
   shed: [['hammer', 2], ['nails', 3], ['axe', 2], ['shovel', 2], ['seeds', 3], ['saw', 2], ['plank', 3], ['log', 1]]
 }
 

@@ -1,9 +1,9 @@
 import { ITEMS, SKILLS, PROFESSIONS, TRAITS, RECIPES, LOOT, STACK_AMOUNTS, FURN } from './data.js'
 import { T, createWorld, rollLoot } from './world.js'
 import { sfx, unlockAudio } from './audio.js'
+import { Ground, TS, WALL_H, FURN_LIFT, hash, shade, makeCanvas, furnSprite, treeSprite, carSprite, roofSprite, splatSprite, wallFace, drawChar, HAIRS } from './gfx.js'
 
-const TS = 32
-const SAVE_KEY = 'vale-morto-save-v1'
+const SAVE_KEY = 'vale-morto-save-v2'
 const START_TIME = 9 * 60
 const canvas = document.getElementById('game')
 const ctx = canvas.getContext('2d')
@@ -23,7 +23,7 @@ const angDiff = (a, b) => {
 
 let S = null
 let W = null
-let zoom = 1.25
+let zoom = 1.6
 let cw = 0
 let ch = 0
 let camX = 0
@@ -36,7 +36,6 @@ let target = null
 
 const FIST = { name: 'Mãos', cat: 'blunt', dmg: 0.35, range: 0.9, speed: 0.5, stam: 4 }
 const SHIRTS = ['#4b5a6b', '#6b4b4b', '#5a6b4b', '#6b634b', '#4b4b6b', '#7a7a7a', '#3c3c3c', '#7a5a3c', '#5c3c5c', '#2f4f4f']
-const SIDING = [['#9a8f80', '#5d544a'], ['#8f9a92', '#525a54'], ['#a08a7a', '#5e4a3e'], ['#8a8fa0', '#4b4f5e'], ['#a49a78', '#5f5842'], ['#9c7f74', '#5a443d']]
 const BODY = ['Mão esquerda', 'Mão direita', 'Antebraço esquerdo', 'Antebraço direito', 'Braço esquerdo', 'Braço direito', 'Pescoço', 'Ombro', 'Perna esquerda', 'Perna direita', 'Tronco']
 
 function resize() {
@@ -75,7 +74,7 @@ function opaque(k) {
 
 function blocks(k, zombie) {
   const t = W.tiles[k]
-  if (t === T.WALL || t === T.FURN || t === T.WATER || t === T.WOODWALL) return true
+  if (t === T.WALL || t === T.FURN || t === T.WATER || t === T.WOODWALL || t === T.CAR) return true
   if (t === T.DOOR) {
     const d = W.doors[k]
     if (d.bars.length) return true
@@ -259,6 +258,7 @@ function newState(opts) {
     time: START_TIME,
     player: {
       name: opts.name || 'Sobrevivente',
+      look: opts.look,
       prof: prof.id,
       traits: opts.traits,
       x: W.spawn.x, y: W.spawn.y, dir: 0,
@@ -349,6 +349,7 @@ function spawnZombie(x, y) {
     st: 'idle', tx: x, ty: y, lx: x, ly: y, mem: 0, cd: 0, stun: 0, down: 0, wt: rand(0, 6),
     dir: rand(0, Math.PI * 2), shirt: randi(0, SHIRTS.length - 1), skin: randi(0, 2), bashT: 0, groan: rand(3, 15), hit: 0, fem: Math.random() < 0.45
   })
+  dressZombie(S.zombies[S.zombies.length - 1])
 }
 
 function spawnInitialZombies() {
@@ -394,38 +395,40 @@ function makeNoise(x, y, r, show = false) {
 
 function moveEntity(e, dx, dy, r, isZombie) {
   let hit = -1
-  const tryAxis = (nx, ny, axis) => {
+  const test = (nx, ny) => {
     const x0 = Math.floor(nx - r)
     const x1 = Math.floor(nx + r)
     const y0 = Math.floor(ny - r)
     const y1 = Math.floor(ny + r)
     for (let ty = y0; ty <= y1; ty++) {
       for (let tx = x0; tx <= x1; tx++) {
-        if (!inb(tx, ty)) return { ok: false, k: -1, tx, ty }
+        if (!inb(tx, ty)) return { k: -1, rect: [tx, ty, tx + 1, ty + 1] }
         const k = idx(tx, ty)
-        if (blocks(k, isZombie)) return { ok: false, k, tx, ty }
+        if (!blocks(k, isZombie)) continue
+        const rc = blockRect(k, tx, ty)
+        if (nx + r > rc[0] && nx - r < rc[2] && ny + r > rc[1] && ny - r < rc[3]) return { k, rect: rc }
       }
     }
-    return { ok: true }
+    return null
   }
   if (dx) {
     const nx = e.x + dx
-    const res = tryAxis(nx, e.y, 'x')
-    if (res.ok) e.x = nx
+    const res = test(nx, e.y)
+    if (!res) e.x = nx
     else {
       hit = res.k
-      e.x = dx > 0 ? res.tx - r - 0.001 : res.tx + 1 + r + 0.001
-      if (Math.abs(e.x - (nx - dx)) > Math.abs(dx)) e.x = nx - dx
+      const fx = dx > 0 ? res.rect[0] - r - 0.001 : res.rect[2] + r + 0.001
+      if (Math.abs(fx - e.x) <= Math.abs(dx) + 0.001 && !test(fx, e.y)) e.x = fx
     }
   }
   if (dy) {
     const ny = e.y + dy
-    const res = tryAxis(e.x, ny, 'y')
-    if (res.ok) e.y = ny
+    const res = test(e.x, ny)
+    if (!res) e.y = ny
     else {
       hit = res.k
-      e.y = dy > 0 ? res.ty - r - 0.001 : res.ty + 1 + r + 0.001
-      if (Math.abs(e.y - (ny - dy)) > Math.abs(dy)) e.y = ny - dy
+      const fy = dy > 0 ? res.rect[1] - r - 0.001 : res.rect[3] + r + 0.001
+      if (Math.abs(fy - e.y) <= Math.abs(dy) + 0.001 && !test(e.x, fy)) e.y = fy
     }
   }
   return hit
@@ -466,7 +469,7 @@ function computeFlow() {
       if (n < 0 || n >= f.length) continue
       if (f[n] <= d + 1) continue
       const t = W.tiles[n]
-      if (t === T.WALL || t === T.FURN || t === T.WATER) continue
+      if (t === T.WALL || t === T.FURN || t === T.WATER || t === T.CAR) continue
       f[n] = d + 1
       q[qt++] = n
     }
@@ -522,6 +525,7 @@ function damageStructure(k, dmg, byPlayer) {
       o.bars[o.bars.length - 1] -= dmg
       if (o.bars[o.bars.length - 1] <= 0) {
         o.bars.pop()
+        emit('chip', x, y, 6, { min: 0.5, max: 2 })
         makeNoise(x, y, 10)
         if (near(x, y, 18)) sfx.bang(0.8)
       }
@@ -533,6 +537,7 @@ function damageStructure(k, dmg, byPlayer) {
       if (o.hp <= 0) {
         o.broken = true
         o.open = true
+        emit('chip', x, y, 10, { min: 0.6, max: 2.5 })
         makeNoise(x, y, 12, byPlayer)
         if (near(x, y, 18)) sfx.bang(1)
         if (byPlayer) triggerAlarm(k)
@@ -542,6 +547,7 @@ function damageStructure(k, dmg, byPlayer) {
       o.hp -= dmg
       if (o.hp <= 0 || byPlayer) {
         o.state = 'broken'
+        emit('glass', x, y, 12, { min: 0.5, max: 2.5, vz0: 0.5, vz1: 2 })
         makeNoise(x, y, 16, true)
         if (near(x, y, 22)) sfx.glass()
         triggerAlarm(k)
@@ -693,7 +699,12 @@ function updateZombies(dt) {
     if (mx || my) {
       z.dir = Math.atan2(my, mx)
       spd *= speedMod(z.x, z.y, true)
+      const ox = z.x
+      const oy = z.y
       const hit = moveEntity(z, mx * spd * dt, my * spd * dt, 0.28, true)
+      const moved = Math.hypot(z.x - ox, z.y - oy)
+      z.phase = (z.phase || 0) + moved * 4
+      z.mv = moved > 0.0005 ? 0.15 : Math.max(0, (z.mv || 0) - dt)
       if (hit >= 0 && z.st !== 'idle' && bashable(hit)) {
         z.bashT -= dt
         if (z.bashT <= 0) {
@@ -774,7 +785,8 @@ function addWound(type, fromZombie) {
       p.infT = S.time
     }
   }
-  S.blood.push({ x: p.x + rand(-0.3, 0.3), y: p.y + rand(-0.3, 0.3), r: rand(0.15, 0.3) })
+  S.blood.push({ x: p.x + rand(-0.3, 0.3), y: p.y + rand(-0.3, 0.3), r: rand(0.12, 0.22), v: randi(0, 999) })
+  emit('blood', p.x, p.y, 6, { min: 0.4, max: 1.8 })
 }
 
 function killZombie(z, byPlayer = true) {
@@ -785,7 +797,8 @@ function killZombie(z, byPlayer = true) {
   if (Math.random() < 0.35) for (const it of rollLoot(Math.random, 'corpse', [1, 2], LOOT, ITEMS, STACK_AMOUNTS)) addTo(items, mkItem(it.id, it.qty))
   S.corpses.push({ x: z.x, y: z.y, dir: z.dir, shirt: z.shirt, items, t: S.time })
   if (S.corpses.length > 300) S.corpses.shift()
-  for (let k = 0; k < 3; k++) S.blood.push({ x: z.x + rand(-0.5, 0.5), y: z.y + rand(-0.5, 0.5), r: rand(0.15, 0.4) })
+  for (let k = 0; k < 2; k++) S.blood.push({ x: z.x + rand(-0.4, 0.4), y: z.y + rand(-0.4, 0.4), r: rand(0.14, 0.3), v: randi(0, 999) })
+  emit('blood', z.x, z.y, 6, { min: 0.3, max: 1.5, vz0: 0.5, vz1: 1.8 })
   if (S.blood.length > 500) S.blood.splice(0, S.blood.length - 500)
   if (near(z.x, z.y, 20)) sfx.kill()
 }
@@ -825,12 +838,14 @@ function playerAttack(shove = false) {
     if (t === T.TREE && def.chop) {
       W.treeHp[k] = (W.treeHp[k] ?? 10) - def.dmg * (1 + lvl('blade') * 0.08) * (S.player.prof === 'lumberjack' ? 1.6 : 1)
       sfx.chop()
+      emit('chip', tx + 0.5, ty + 0.5, 5, { ang: p.dir + Math.PI, spread: 1.2, min: 0.5, max: 2 })
       makeNoise(p.x, p.y, 9)
       addXP('blade', 0.5)
       addXP('strength', 0.3)
       wearWeapon(item, def, 0.4)
       if (W.treeHp[k] <= 0) {
         W.tiles[k] = T.GRASS
+        ground.dirty(tx, ty)
         delete W.treeHp[k]
         dropGround(tx, ty, mkItem('log', randi(1, 2)))
         log('A árvore caiu. Há toras no chão.', 'good')
@@ -871,7 +886,7 @@ function playerAttack(shove = false) {
     z.mem = 10
     sfx.hit()
     makeNoise(p.x, p.y, 5)
-    S.blood.push({ x: z.x + rand(-0.2, 0.2), y: z.y + rand(-0.2, 0.2), r: rand(0.08, 0.18) })
+    emit('blood', z.x, z.y, randi(5, 9), { ang: a, spread: 0.7, min: 0.8, max: 3, vz0: 0.5, vz1: 2.5, s0: 1, s1: 2.2 })
     if (!shove) {
       addXP(skill, 1.5)
       addXP('strength', 0.3)
@@ -941,7 +956,8 @@ function shoot(item, def) {
       hitZ.lx = p.x
       hitZ.ly = p.y
       hitZ.mem = 10
-      S.blood.push({ x: hitZ.x + Math.cos(a) * 0.4, y: hitZ.y + Math.sin(a) * 0.4, r: rand(0.1, 0.25) })
+      emit('blood', hitZ.x, hitZ.y, randi(7, 12), { ang: a, spread: 0.5, min: 1.5, max: 4.5, vz0: 0.3, vz1: 2, s0: 1, s1: 2.4 })
+      S.blood.push({ x: hitZ.x + Math.cos(a) * 0.6, y: hitZ.y + Math.sin(a) * 0.6, r: rand(0.12, 0.22), v: randi(0, 999) })
       addXP('gun', 2)
       if (hitZ.hp <= 0) {
         killZombie(hitZ)
@@ -1010,6 +1026,7 @@ function getTarget() {
   const k = idx(tx, ty)
   const t = W.tiles[k]
   const base = { k, x: tx + 0.5, y: ty + 0.5 }
+  if (t === T.CAR) return { ...base, kind: 'car', car: W.carAt[k], label: W.cars[W.carAt[k]].wreck ? 'Revistar carro destruído' : 'Revistar porta-malas' }
   if (S.ground[k] && S.ground[k].length && t !== T.FURN) return { ...base, kind: 'ground', label: 'Itens no chão' }
   if (t === T.FURN) {
     const f = W.furn[k]
@@ -1053,6 +1070,7 @@ function interact() {
   if (!tg) return
   if (tg.kind === 'corpse') return openContainer({ type: 'corpse', c: tg.c })
   if (tg.kind === 'ground') return openContainer({ type: 'ground', k: tg.k })
+  if (tg.kind === 'car') return startAction('Abrindo porta-malas', 1, () => openContainer({ type: 'car', i: tg.car }))
   if (tg.kind === 'container' || tg.kind === 'stove') {
     if (tg.kind === 'stove' && !S.powerOff && hasCookables()) {
       return startAction('Cozinhando', 4, () => cook())
@@ -1257,6 +1275,7 @@ function dig() {
   if (!invFind('shovel')) return
   startAction('Cavando', 4, () => {
     W.tiles[tg.k] = T.DIRT
+    ground.dirty(tg.k % W.w, Math.floor(tg.k / W.w))
     addXP('farming', 2)
   }, { sound: 'dig' })
 }
@@ -1290,6 +1309,13 @@ function openContainer(ref) {
       }
     }
   }
+  if (ref.type === 'car') {
+    const c = W.cars[ref.i]
+    if (!c.items) {
+      c.items = []
+      for (const it of rollLoot(Math.random, 'car', [0, Math.round(3 * S.settings.loot)], LOOT, ITEMS, STACK_AMOUNTS)) addTo(c.items, mkItem(it.id, it.qty))
+    }
+  }
   S.openCont = ref
   $('container').classList.remove('hidden')
   renderContainer()
@@ -1299,17 +1325,23 @@ function contItems(ref) {
   if (ref.type === 'furn') return W.furn[ref.k].items
   if (ref.type === 'corpse') return ref.c.items
   if (ref.type === 'ground') return S.ground[ref.k] || (S.ground[ref.k] = [])
+  if (ref.type === 'car') return W.cars[ref.i].items
   return []
 }
 
 function contName(ref) {
   if (ref.type === 'furn') return FURN[W.furn[ref.k].kind].name
   if (ref.type === 'corpse') return 'Corpo'
+  if (ref.type === 'car') return 'Carro'
   return 'Chão'
 }
 
 function contPos(ref) {
   if (ref.type === 'corpse') return [ref.c.x, ref.c.y]
+  if (ref.type === 'car') {
+    const c = W.cars[ref.i]
+    return c.horiz ? [c.x + 1, c.y + 0.5] : [c.x + 0.5, c.y + 1]
+  }
   return tileCenter(ref.k)
 }
 
@@ -1696,6 +1728,8 @@ function updatePlayer(dt, realDt) {
   if (pain > 40) spd *= 0.85
   if (over) spd *= Math.max(0.4, 1 - over * 0.07)
   spd *= speedMod(p.x, p.y, false)
+  p.moving = moving
+  if (moving) p.phase = (p.phase || 0) + spd * dt * 3.4
   if (moving) {
     const l = Math.hypot(mx, my)
     const before = Math.floor(p.y) * W.w + Math.floor(p.x)
@@ -1714,6 +1748,7 @@ function updatePlayer(dt, realDt) {
       if (hasTrait('lightFoot')) r *= 0.6
       if (hasTrait('clumsy')) r *= 1.4
       makeNoise(p.x, p.y, r)
+      if (running) emit('dust', p.x - Math.cos(p.dir) * 0.2, p.y + 0.2, 1, { min: 0, max: 0.1, vz0: 0, vz1: 0, l0: 0.4, l1: 0.6, s0: 1, s1: 2 })
       if (p.sneak && S.zombies.some(z => dist(z.x, z.y, p.x, p.y) < 8)) addXP('sneak', 0.6)
     }
   }
@@ -2002,6 +2037,8 @@ function update(realDt) {
     }
   }
   updateVision()
+  updateParts(S.sleeping ? 0 : realDt)
+  ambientParticles(realDt)
   for (const r of S.rings) r.t += realDt
   S.rings = S.rings.filter(r => r.t < 0.8)
   for (const t of S.tracers) t.t -= realDt
@@ -2015,111 +2052,1136 @@ function update(realDt) {
   }
 }
 
+const PANTS = ['#2f3440', '#3a3a30', '#4a3a2a', '#2a2a2a', '#3a4a5a', '#5a4a3a']
+const ZSKINS = ['#8a9a78', '#9a9a7c', '#7a8a72', '#a09a84', '#6e7a66']
+const SIDING_FACE = ['#a89c8a', '#97a39a', '#ab9584', '#959aab', '#b0a582', '#a68a7e', '#c4bca8', '#8a9a8a']
+let ground = null
+const fogC = makeCanvas(1, 1)
+const fogG = fogC.getContext('2d')
+const roofFade = {}
+let rainDrops = []
+
+function initGfx() {
+  ground = new Ground(W)
+  for (const b of W.buildings) b.lit = b.type === 'house' ? hash(b.id, 7, 7) < 0.5 : b.type !== 'shed'
+  for (const z of S.zombies) dressZombie(z)
+  S.parts = []
+  for (const b of S.blood) if (b.v === undefined) b.v = Math.floor(Math.random() * 1000)
+}
+
+function dressZombie(z) {
+  if (z.pants !== undefined) return
+  z.pants = randi(0, PANTS.length - 1)
+  z.hair = Math.random() < 0.2 ? 0 : z.fem ? 2 : 1
+  z.hc = randi(0, HAIRS.length - 1)
+  z.gore = randi(1, 999)
+  z.phase = rand(0, 6)
+  z.skin = randi(0, ZSKINS.length - 1)
+}
+
+function wl(x, y) {
+  const t = tileAt(x, y)
+  return t === T.WALL || t === T.WINDOW || t === T.DOOR || t === T.WOODWALL
+}
+
+function orient(x, y) {
+  return wl(x - 1, y) || wl(x + 1, y) ? 'h' : 'v'
+}
+
+function wallLook(k) {
+  if (W.tiles[k] === T.WOODWALL) return ['#9a7a4c', 'plank', '#6e5634']
+  const b = W.bld[k]
+  if (b < 0) return ['#9a8f80', 'clap', '#5d544a']
+  const bd = W.buildings[b]
+  if (bd.type === 'shed') return ['#8a6a48', 'plank', '#4f3c28']
+  if (bd.type === 'police') return ['#7f8a96', 'concrete', '#4a525c']
+  if (bd.type !== 'house') return ['#8e5a46', 'brick', '#5a4a40']
+  const f = SIDING_FACE[Math.floor(hash(b, 2, 71) * SIDING_FACE.length)]
+  return [f, 'clap', shade(f, -0.45)]
+}
+
+function isNight() {
+  return daylight() < 0.6
+}
+
+function buildingLit(k) {
+  const b = W.bld[k]
+  return b >= 0 && W.buildings[b].lit && !S.powerOff && isNight()
+}
+
+const WA = 11
+const WB = 21
+
+function wallArms(x, y) {
+  return { l: wl(x - 1, y), r: wl(x + 1, y), u: wl(x, y - 1), d: wl(x, y + 1) }
+}
+
+function faceSegs(a) {
+  const s = []
+  if (a.l) s.push([0, WA])
+  if (!a.d) s.push([WA, WB])
+  if (a.r) s.push([WB, TS])
+  if (!a.l && !a.r && a.d) return s
+  return s
+}
+
+function drawFaces(px, py, a, tex) {
+  const H = WALL_H
+  for (const [x0, x1] of faceSegs(a)) ctx.drawImage(tex, x0 * 2, 0, (x1 - x0) * 2, H * 2, px + x0, py + WB - H, x1 - x0, H)
+}
+
+function capRects(a, skipCenter) {
+  const r = []
+  if (!skipCenter) r.push([WA, WA, WB, WB])
+  if (a.l) r.push([0, WA, WA, WB])
+  if (a.r) r.push([WB, WA, TS, WB])
+  if (a.u) r.push([WA, 0, WB, WA])
+  if (a.d) r.push([WA, WB, WB, TS])
+  return r
+}
+
+function drawCaps(px, py, a, col, rects) {
+  const H = WALL_H
+  const oy = py - H
+  ctx.fillStyle = col
+  for (const [x0, y0, x1, y1] of rects) ctx.fillRect(px + x0, oy + y0, x1 - x0, y1 - y0)
+  ctx.fillStyle = 'rgba(255,255,255,0.2)'
+  if (a.l) ctx.fillRect(px, oy + WA, WA, 1.2)
+  if (!a.u) ctx.fillRect(px + WA, oy + WA, WB - WA, 1.2)
+  if (a.r) ctx.fillRect(px + WB, oy + WA, TS - WB, 1.2)
+  if (a.u) ctx.fillRect(px + WA, oy, 1.2, WA)
+  if (a.d) ctx.fillRect(px + WA, oy + WB, 1.2, TS - WB)
+  if (!a.l) ctx.fillRect(px + WA, oy + WA, 1.2, WB - WA)
+  ctx.fillStyle = 'rgba(0,0,0,0.5)'
+  if (a.u) ctx.fillRect(px + WB - 1, oy, 1, WA)
+  if (a.d) ctx.fillRect(px + WB - 1, oy + WB, 1, TS - WB)
+  if (!a.r) ctx.fillRect(px + WB - 1, oy + WA, 1, WB - WA)
+}
+
+function drawPlanks(px, py, n, w, h, vertical) {
+  for (let i = 0; i < n; i++) {
+    ctx.save()
+    ctx.translate(px + w / 2, py + h / 2)
+    if (vertical) ctx.rotate(Math.PI / 2)
+    ctx.translate(0, (i - (n - 1) / 2) * ((vertical ? w : h) / 5))
+    ctx.rotate(i % 2 ? 0.22 : -0.22)
+    const L = (vertical ? h : w) * 0.6
+    ctx.fillStyle = 'rgba(0,0,0,0.35)'
+    ctx.fillRect(-L + 1, -2, L * 2, 5)
+    ctx.fillStyle = i % 2 ? '#a8824e' : '#9a7444'
+    ctx.fillRect(-L, -3, L * 2, 5)
+    ctx.fillStyle = 'rgba(255,255,255,0.15)'
+    ctx.fillRect(-L, -3, L * 2, 1)
+    ctx.fillStyle = '#3a3a3a'
+    ctx.fillRect(-L * 0.85, -1.5, 1.5, 1.5)
+    ctx.fillRect(L * 0.85 - 1.5, -1.5, 1.5, 1.5)
+    ctx.restore()
+  }
+}
+
+function glassFill(x, y, w, h, lit, state) {
+  if (state === 'broken') {
+    ctx.fillStyle = '#121518'
+    ctx.fillRect(x, y, w, h)
+    ctx.fillStyle = 'rgba(190,215,230,0.55)'
+    ctx.beginPath()
+    ctx.moveTo(x, y)
+    ctx.lineTo(x + w * 0.35, y)
+    ctx.lineTo(x + w * 0.15, y + h * 0.45)
+    ctx.lineTo(x, y + h * 0.7)
+    ctx.fill()
+    ctx.beginPath()
+    ctx.moveTo(x + w, y + h)
+    ctx.lineTo(x + w * 0.7, y + h)
+    ctx.lineTo(x + w, y + h * 0.5)
+    ctx.fill()
+    return
+  }
+  const gr = ctx.createLinearGradient(x, y, x + w, y + h)
+  if (lit) {
+    gr.addColorStop(0, '#ffe6a8')
+    gr.addColorStop(1, '#e8a050')
+  } else {
+    gr.addColorStop(0, '#a6c6d6')
+    gr.addColorStop(0.5, '#5a7a8c')
+    gr.addColorStop(1, '#2c4250')
+  }
+  ctx.fillStyle = gr
+  ctx.fillRect(x, y, w, h)
+  if (state === 'open') {
+    ctx.fillStyle = lit ? 'rgba(255,220,150,0.6)' : '#141a1e'
+    ctx.fillRect(x, y + h / 2, w, h / 2)
+  }
+  if (!lit) {
+    ctx.fillStyle = 'rgba(255,255,255,0.32)'
+    ctx.beginPath()
+    ctx.moveTo(x + w * 0.15, y + h)
+    ctx.lineTo(x + w * 0.4, y)
+    ctx.lineTo(x + w * 0.52, y)
+    ctx.lineTo(x + w * 0.27, y + h)
+    ctx.fill()
+  }
+}
+
+function drawWallTile(x, y, k) {
+  const px = x * TS
+  const py = y * TS
+  const [face, style, cap] = wallLook(k)
+  const a = wallArms(x, y)
+  drawFaces(px, py, a, wallFace(style, face))
+  drawCaps(px, py, a, cap, capRects(a))
+}
+
+function drawWindowTile(x, y, k) {
+  const w = W.windows[k]
+  const px = x * TS
+  const py = y * TS
+  const H = WALL_H
+  const [face, style, cap] = wallLook(k)
+  const a = wallArms(x, y)
+  const o = orient(x, y)
+  const lit = buildingLit(k)
+  drawFaces(px, py, a, wallFace(style, face))
+  if (o === 'h') {
+    const gx = px + 5
+    const gy = py + WB - H + 4
+    const gw = TS - 10
+    const gh = H - 10
+    ctx.fillStyle = '#e4ded0'
+    ctx.fillRect(gx - 2, gy - 2, gw + 4, gh + 4)
+    glassFill(gx, gy, gw, gh, lit, w.state)
+    if (w.state !== 'broken') {
+      ctx.fillStyle = '#e4ded0'
+      ctx.fillRect(gx + gw / 2 - 0.75, gy, 1.5, gh)
+      ctx.fillRect(gx, gy + gh / 2 - 0.75, gw, 1.5)
+    }
+    if (w.curtain && w.state !== 'broken') {
+      const cc = ['#8a3a32', '#3a5a7a', '#7a6a3a', '#5a3a5a'][k % 4]
+      ctx.fillStyle = cc
+      ctx.fillRect(gx, gy, 4, gh)
+      ctx.fillRect(gx + gw - 4, gy, 4, gh)
+      if (w.state === 'closed') {
+        ctx.globalAlpha = 0.85
+        ctx.fillRect(gx + 4, gy, gw - 8, gh)
+        ctx.globalAlpha = 1
+        ctx.fillStyle = 'rgba(0,0,0,0.2)'
+        for (let i = gx + 6; i < gx + gw - 4; i += 3) ctx.fillRect(i, gy, 0.8, gh)
+      }
+    }
+    ctx.fillStyle = '#cfc8b8'
+    ctx.fillRect(gx - 3, gy + gh + 2, gw + 6, 2.5)
+    drawCaps(px, py, a, cap, capRects(a))
+    ctx.fillStyle = w.state === 'broken' ? '#151a1e' : 'rgba(165,200,215,0.95)'
+    ctx.fillRect(px + 3, py - H + WA + 3, TS - 6, WB - WA - 6)
+    if (w.bars.length) drawPlanks(px, py + WB - H, w.bars.length, TS, H)
+  } else {
+    drawCaps(px, py, a, cap, capRects(a))
+    ctx.fillStyle = '#e4ded0'
+    ctx.fillRect(px + WA, py - H + 3, WB - WA, TS - 6)
+    glassFill(px + WA + 2, py - H + 4, WB - WA - 4, TS - 8, lit, w.state)
+    if (w.bars.length) drawPlanks(px + WA - 4, py - H, w.bars.length, WB - WA + 8, TS, true)
+  }
+}
+
+function drawDoorTile(x, y, k) {
+  const d = W.doors[k]
+  const px = x * TS
+  const py = y * TS
+  const H = WALL_H
+  const [face, style, cap] = wallLook(k)
+  const a = wallArms(x, y)
+  const o = orient(x, y)
+  const wood = '#6e4a2c'
+  if (o === 'h') {
+    const fy = py + WB - H
+    ctx.fillStyle = shade(face, -0.3)
+    ctx.fillRect(px, fy, 3, H)
+    ctx.fillRect(px + TS - 3, fy, 3, H)
+    if (!d.open && !d.broken) {
+      ctx.fillStyle = wood
+      ctx.fillRect(px + 3, fy, TS - 6, H)
+      ctx.strokeStyle = 'rgba(0,0,0,0.3)'
+      ctx.lineWidth = 0.8
+      ctx.strokeRect(px + 6, fy + 5, TS - 12, H / 2 - 5)
+      ctx.strokeRect(px + 6, fy + H / 2 + 2, TS - 12, H / 2 - 5)
+      ctx.fillStyle = '#d6b45a'
+      ctx.beginPath()
+      ctx.arc(px + TS - 8, fy + H / 2 + 1, 1.6, 0, Math.PI * 2)
+      ctx.fill()
+      if (d.bars.length) drawPlanks(px, fy, d.bars.length, TS, H)
+    } else if (d.broken) {
+      ctx.fillStyle = '#5a3c22'
+      ctx.save()
+      ctx.translate(px + 10, py + 26)
+      ctx.rotate(0.6)
+      ctx.fillRect(-6, -1.5, 12, 3)
+      ctx.restore()
+      ctx.fillRect(px + 18, py + 28, 8, 2.5)
+    } else {
+      ctx.fillStyle = 'rgba(0,0,0,0.3)'
+      ctx.fillRect(px + 5, py + WB + 2, 5, 14)
+      ctx.fillStyle = wood
+      ctx.fillRect(px + 3, py + WB - H + 14, 4, H)
+      ctx.fillStyle = shade(wood, 0.2)
+      ctx.fillRect(px + 3, py + WB - H, 4, 14)
+    }
+    drawCaps(px, py, a, cap, [[0, WA, TS, WA + 4]])
+  } else {
+    const jambs = []
+    if (a.u) jambs.push([WA, 0, WB, 4])
+    if (a.d) jambs.push([WA, TS - 4, WB, TS])
+    ctx.fillStyle = cap
+    for (const [x0, y0, x1, y1] of jambs) ctx.fillRect(px + x0, py - H + y0, x1 - x0, y1 - y0)
+    if (!d.open && !d.broken) {
+      ctx.fillStyle = shade(wood, -0.2)
+      ctx.fillRect(px + WA + 2, py + TS - 4 - H, WB - WA - 4, H)
+      ctx.fillStyle = shade(wood, 0.2)
+      ctx.fillRect(px + WA + 2, py - H + 4, WB - WA - 4, TS - 8)
+      ctx.fillStyle = '#d6b45a'
+      ctx.fillRect(px + TS / 2 - 1, py - H + TS / 2, 2, 2)
+      if (d.bars.length) drawPlanks(px + WA - 4, py - H, d.bars.length, WB - WA + 8, TS, true)
+    } else if (!d.broken) {
+      ctx.fillStyle = shade(wood, -0.2)
+      ctx.fillRect(px + WB, py + 8 - H + 3, 13, H)
+      ctx.fillStyle = shade(wood, 0.2)
+      ctx.fillRect(px + WB, py + 4 - H, 13, 4)
+    }
+  }
+}
+
+function blockRect(k, tx, ty) {
+  const t = W.tiles[k]
+  if (t === T.WALL || t === T.WOODWALL || t === T.WINDOW || t === T.DOOR) {
+    const I = 0.33
+    return [tx + (wl(tx - 1, ty) ? 0 : I), ty + (wl(tx, ty - 1) ? 0 : I), tx + 1 - (wl(tx + 1, ty) ? 0 : I), ty + 1 - (wl(tx, ty + 1) ? 0 : I)]
+  }
+  if (t === T.FURN) return [tx + 0.06, ty + 0.06, tx + 0.94, ty + 0.94]
+  return [tx, ty, tx + 1, ty + 1]
+}
+
+function playerBuilding() {
+  const p = S.player
+  const x = Math.floor(p.x)
+  const y = Math.floor(p.y)
+  const k = idx(x, y)
+  const t = W.tiles[k]
+  if (t === T.WALL || t === T.WINDOW || t === T.WOODWALL) {
+    let nx = x
+    let ny = y
+    if (orient(x, y) === 'h') ny = p.y % 1 < 0.5 ? y - 1 : y + 1
+    else nx = p.x % 1 < 0.5 ? x - 1 : x + 1
+    return inb(nx, ny) ? W.bld[idx(nx, ny)] : -1
+  }
+  if (t === T.DOOR) return W.bld[k]
+  const b = W.bld[k]
+  return b >= 0 && t !== T.GRASS && t !== T.DIRT ? b : -1
+}
+
+function drawCampfire(px, py, f, now) {
+  ctx.fillStyle = 'rgba(0,0,0,0.25)'
+  ctx.beginPath()
+  ctx.ellipse(px + 17, py + 18, 13, 9, 0, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.fillStyle = f.fuel > 0 ? '#2a1a12' : '#3a3a38'
+  ctx.beginPath()
+  ctx.ellipse(px + 16, py + 16, 8, 6, 0, 0, Math.PI * 2)
+  ctx.fill()
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2
+    const sx = px + 16 + Math.cos(a) * 11
+    const sy = py + 16 + Math.sin(a) * 8.5
+    ctx.fillStyle = '#6a6862'
+    ctx.beginPath()
+    ctx.ellipse(sx, sy, 3.6, 2.8, a, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.fillStyle = 'rgba(255,255,255,0.18)'
+    ctx.beginPath()
+    ctx.ellipse(sx - 1, sy - 1, 1.6, 1.1, a, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  ctx.strokeStyle = '#5a3a20'
+  ctx.lineWidth = 3.2
+  ctx.lineCap = 'round'
+  ctx.beginPath()
+  ctx.moveTo(px + 9, py + 20)
+  ctx.lineTo(px + 23, py + 12)
+  ctx.moveTo(px + 9, py + 12)
+  ctx.lineTo(px + 23, py + 20)
+  ctx.stroke()
+  ctx.lineCap = 'butt'
+  if (f.fuel > 0) {
+    ctx.save()
+    ctx.globalCompositeOperation = 'lighter'
+    const gl = ctx.createRadialGradient(px + 16, py + 14, 1, px + 16, py + 14, 18)
+    gl.addColorStop(0, 'rgba(255,150,50,0.55)')
+    gl.addColorStop(1, 'rgba(255,90,20,0)')
+    ctx.fillStyle = gl
+    ctx.fillRect(px - 4, py - 6, 40, 40)
+    ctx.restore()
+    for (let i = 0; i < 3; i++) {
+      const fl = Math.sin(now * (11 + i * 3) + i) * 2
+      const s = 1 - i * 0.28
+      const gr = ctx.createLinearGradient(0, py + 18, 0, py + 2)
+      gr.addColorStop(0, i === 2 ? '#fff4c0' : '#ff8a2a')
+      gr.addColorStop(1, i === 0 ? 'rgba(200,40,10,0.2)' : '#ffd25a')
+      ctx.fillStyle = gr
+      ctx.beginPath()
+      ctx.moveTo(px + 16 - 7 * s, py + 18)
+      ctx.quadraticCurveTo(px + 16 - 6 * s, py + 9, px + 16 + fl, py + 1 + i * 4)
+      ctx.quadraticCurveTo(px + 16 + 6 * s, py + 9, px + 16 + 7 * s, py + 18)
+      ctx.fill()
+    }
+  }
+}
+
+function drawFurnTile(x, y, k, now) {
+  const f = W.furn[k]
+  const px = x * TS
+  const py = y * TS
+  if (f.kind === 'campfire') return drawCampfire(px, py, f, now)
+  const v = (x * 7 + y * 13) % 5
+  ctx.drawImage(furnSprite(f.kind, v), px, py - FURN_LIFT, TS, TS + FURN_LIFT)
+  if (f.kind === 'collector' && f.water > 0.5) {
+    ctx.fillStyle = 'rgba(120,170,200,0.75)'
+    ctx.beginPath()
+    ctx.ellipse(px + 16, py + 4, 8 * Math.min(1, f.water / 40 + 0.3), 2.6, 0, 0, Math.PI * 2)
+    ctx.fill()
+  }
+}
+
+function drawTreeBase(x, y) {
+  const px = x * TS + 16
+  const py = y * TS + 16
+  ctx.fillStyle = 'rgba(0,0,0,0.22)'
+  ctx.beginPath()
+  ctx.ellipse(px + 12, py + 9, 24, 13, 0.3, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.fillStyle = '#3e2e20'
+  ctx.fillRect(px - 3, py - 10, 6, 14)
+  ctx.fillStyle = 'rgba(255,255,255,0.1)'
+  ctx.fillRect(px - 3, py - 10, 2, 14)
+}
+
+function drawCanopy(x, y, now) {
+  const k = idx(x, y)
+  const v = Math.floor(hash(x, y, 5) * 6)
+  const p = S.player
+  const px = x * TS + 16
+  const py = y * TS + 16
+  const sway = Math.sin(now * 0.9 + x * 0.7 + y * 0.3) * 1.3
+  const near = Math.abs(p.x - (x + 0.5)) < 1.6 && p.y < y + 0.9 && p.y > y - 2.6
+  const zNear = S.vis[k] && S.zombies.some(z => Math.abs(z.x - (x + 0.5)) < 1.3 && z.y < y + 0.9 && z.y > y - 2.4)
+  ctx.globalAlpha = near || zNear ? 0.42 : 1
+  const s = 84 * (0.85 + hash(x, y, 6) * 0.3)
+  ctx.drawImage(treeSprite(v), px - s / 2 + sway, py - s / 2 - 20, s, s)
+  ctx.globalAlpha = 1
+}
+
+function drawCar(c) {
+  const sp = carSprite(c.color, c.wreck, c.horiz)
+  const w = sp.width / 2
+  const h = sp.height / 2
+  const cx = (c.horiz ? c.x + 1 : c.x + 0.5) * TS
+  const cy = (c.horiz ? c.y + 0.5 : c.y + 1) * TS
+  ctx.save()
+  ctx.translate(cx, cy)
+  ctx.rotate(c.rot || 0)
+  ctx.drawImage(sp, -w / 2, -h / 2 - 3, w, h)
+  ctx.restore()
+}
+
+function drawLampPole(l) {
+  const x = l.x * TS
+  const y = l.y * TS
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)'
+  ctx.lineWidth = 3
+  ctx.beginPath()
+  ctx.moveTo(x, y)
+  ctx.lineTo(x + 26, y + 16)
+  ctx.stroke()
+  ctx.fillStyle = 'rgba(0,0,0,0.3)'
+  ctx.beginPath()
+  ctx.ellipse(x, y + 1, 4, 2.5, 0, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.fillStyle = '#3a3e42'
+  ctx.fillRect(x - 1.5, y - 40, 3, 40)
+  ctx.fillStyle = 'rgba(255,255,255,0.15)'
+  ctx.fillRect(x - 1.5, y - 40, 1, 40)
+}
+
+function drawLampHead(l) {
+  const x = l.x * TS
+  const y = l.y * TS
+  const on = !S.powerOff && isNight()
+  ctx.fillStyle = '#3a3e42'
+  ctx.fillRect(x - 1, y - 42, 10, 2.5)
+  ctx.fillStyle = '#2a2d30'
+  ctx.beginPath()
+  ctx.ellipse(x + 9, y - 40, 5, 3, 0, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.fillStyle = on ? '#ffe2a0' : '#8a8a80'
+  ctx.beginPath()
+  ctx.ellipse(x + 9, y - 39.5, 3, 1.6, 0, 0, Math.PI * 2)
+  ctx.fill()
+}
+
+function drawPlants(x0, y0, x1, y1, now) {
+  for (const key in W.plots) {
+    const k = +key
+    const x = k % W.w
+    const y = Math.floor(k / W.w)
+    if (x < x0 || x > x1 || y < y0 || y > y1 || !S.seen[k]) continue
+    const st = W.plots[key].stage
+    for (const [ox, oy] of [[8, 9], [24, 9], [8, 25], [24, 25]]) {
+      const px = x * TS + ox
+      const py = y * TS + oy
+      const sw = Math.sin(now * 1.5 + px * 0.1) * 0.6
+      const n = 2 + st * 2
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 + px
+        const l = 2 + st * 2.2
+        ctx.fillStyle = i % 2 ? '#5e8a32' : '#78a43e'
+        ctx.beginPath()
+        ctx.ellipse(px + Math.cos(a) * l * 0.5 + sw, py + Math.sin(a) * l * 0.5 - st, l * 0.6, l * 0.3, a, 0, Math.PI * 2)
+        ctx.fill()
+      }
+      if (st >= 3) {
+        ctx.fillStyle = (x + y + ox) % 2 ? '#d8582a' : '#c83a2a'
+        ctx.beginPath()
+        ctx.arc(px + 2, py - 2, 2.6, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.fillStyle = 'rgba(255,255,255,0.35)'
+        ctx.fillRect(px + 1, py - 4, 1, 1)
+      }
+    }
+  }
+}
+
+function drawWater(x0, y0, x1, y1, now) {
+  ctx.strokeStyle = 'rgba(170,210,225,0.18)'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    const k = idx(x, y)
+    if (W.tiles[k] !== T.WATER || !S.seen[k]) continue
+    const ph = now * 0.6 + hash(x, y, 9) * 6
+    const ox = ((ph * 6) % 40) - 6
+    const oy = 8 + hash(x, y, 10) * 16
+    ctx.moveTo(x * TS + ox, y * TS + oy)
+    ctx.quadraticCurveTo(x * TS + ox + 5, y * TS + oy - 2, x * TS + ox + 10, y * TS + oy)
+  }
+  ctx.stroke()
+}
+
+function charLook(z) {
+  return {
+    shirt: SHIRTS[z.shirt] || '#4b5a6b',
+    pants: PANTS[z.pants || 0],
+    skin: ZSKINS[z.skin || 0],
+    hair: z.hair ?? 1,
+    hairColor: HAIRS[z.hc || 0],
+    gore: z.gore || 7
+  }
+}
+
+function drawZombie(z) {
+  const l = charLook(z)
+  drawChar(ctx, {
+    x: z.x * TS, y: z.y * TS, dir: z.dir, phase: z.phase || 0, moving: z.mv > 0, down: z.down > 0,
+    zombie: true, reach: z.st === 'chase', hit: z.hit, wobble: Math.sin((z.phase || 0) * 0.5) * 0.12, ...l
+  })
+}
+
+function drawPlayerChar(p) {
+  const { item } = currentWeapon()
+  const look = p.look || { shirt: '#3d5f7a', pants: '#2f3440', skin: '#d2a882', hair: 1, hairColor: '#3a2a1c' }
+  const bag = p.inv.some(i => ITEMS[i.id].kind === 'bag')
+  drawChar(ctx, {
+    x: p.x * TS, y: p.y * TS, dir: p.dir, phase: p.phase || 0, moving: !!p.moving, down: S.over,
+    shirt: p.sneak ? shade(look.shirt, -0.25) : look.shirt, pants: look.pants, skin: look.skin, hair: look.hair, hairColor: look.hairColor,
+    weapon: item ? item.id : null, swing: p.swing > 0 ? p.swing / 0.18 : 0, bag, bagColor: '#4a4a32', hit: 0
+  })
+}
+
+function drawCorpse(c) {
+  const age = Math.max(0, S.time - c.t)
+  const r = Math.min(0.62, 0.18 + age / 90) * TS
+  const gr = ctx.createRadialGradient(c.x * TS, c.y * TS, 2, c.x * TS, c.y * TS, r)
+  gr.addColorStop(0, 'rgba(70,8,6,0.85)')
+  gr.addColorStop(0.75, 'rgba(70,8,6,0.6)')
+  gr.addColorStop(1, 'rgba(70,8,6,0)')
+  ctx.fillStyle = gr
+  ctx.beginPath()
+  ctx.ellipse(c.x * TS, c.y * TS, r * 1.25, r, c.dir || 0, 0, Math.PI * 2)
+  ctx.fill()
+  const l = charLook(c)
+  drawChar(ctx, { x: c.x * TS, y: c.y * TS, dir: c.dir || 0, down: true, ...l })
+}
+
+function drawSack(x, y) {
+  ctx.fillStyle = 'rgba(0,0,0,0.3)'
+  ctx.beginPath()
+  ctx.ellipse(x + 2, y + 4, 8, 4, 0, 0, Math.PI * 2)
+  ctx.fill()
+  const gr = ctx.createLinearGradient(x - 7, y - 8, x + 7, y + 5)
+  gr.addColorStop(0, '#c8aa72')
+  gr.addColorStop(1, '#7a6440')
+  ctx.fillStyle = gr
+  ctx.beginPath()
+  ctx.moveTo(x - 7, y + 4)
+  ctx.quadraticCurveTo(x - 9, y - 4, x - 3, y - 7)
+  ctx.lineTo(x + 3, y - 7)
+  ctx.quadraticCurveTo(x + 9, y - 4, x + 7, y + 4)
+  ctx.closePath()
+  ctx.fill()
+  ctx.strokeStyle = 'rgba(0,0,0,0.4)'
+  ctx.lineWidth = 0.8
+  ctx.stroke()
+  ctx.fillStyle = '#5a4428'
+  ctx.fillRect(x - 3, y - 8, 6, 2)
+}
+
+function emit(type, x, y, n, opts = {}) {
+  if (!S.parts) S.parts = []
+  for (let i = 0; i < n; i++) {
+    const a = opts.ang !== undefined ? opts.ang + rand(-opts.spread || -0.6, opts.spread || 0.6) : rand(0, Math.PI * 2)
+    const sp = rand(opts.min ?? 0.6, opts.max ?? 2.4)
+    S.parts.push({
+      type, x, y, z: opts.z ?? 0.35,
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz: rand(opts.vz0 ?? 0.5, opts.vz1 ?? 2.2),
+      life: rand(opts.l0 ?? 0.5, opts.l1 ?? 1.0), max: 1, size: rand(opts.s0 ?? 0.8, opts.s1 ?? 1.8),
+      col: opts.col
+    })
+    S.parts[S.parts.length - 1].max = S.parts[S.parts.length - 1].life
+  }
+  if (S.parts.length > 500) S.parts.splice(0, S.parts.length - 500)
+}
+
+function updateParts(dt) {
+  if (!S.parts) S.parts = []
+  for (const p of S.parts) {
+    p.life -= dt
+    if (p.type === 'smoke') {
+      p.x += p.vx * dt * 0.1 + Math.sin(p.life * 3) * 0.003
+      p.z += dt * 0.7
+      p.size += dt * 2.5
+      continue
+    }
+    if (p.type === 'dust' || p.type === 'splash') {
+      p.size += dt * (p.type === 'splash' ? 14 : 6)
+      continue
+    }
+    p.x += p.vx * dt
+    p.y += p.vy * dt
+    p.vz -= 9 * dt
+    p.z += p.vz * dt
+    if (p.z <= 0) {
+      p.z = 0
+      if (p.type === 'blood') {
+        S.blood.push({ x: p.x, y: p.y, r: rand(0.03, 0.07), v: randi(0, 999) })
+        p.life = 0
+      } else {
+        p.vx *= 0.3
+        p.vy *= 0.3
+        p.vz = Math.abs(p.vz) * 0.25
+      }
+    }
+  }
+  S.parts = S.parts.filter(p => p.life > 0)
+  if (S.blood.length > 700) S.blood.splice(0, S.blood.length - 700)
+}
+
+function drawParts() {
+  for (const p of S.parts) {
+    const k = idx(Math.floor(p.x), Math.floor(p.y))
+    if (k < 0 || k >= W.tiles.length || !S.vis[k]) continue
+    const x = p.x * TS
+    const y = (p.y - p.z) * TS
+    const a = Math.max(0, p.life / p.max)
+    switch (p.type) {
+      case 'blood':
+        ctx.fillStyle = '#7a0e0a'
+        ctx.fillRect(x - p.size / 2, y - p.size / 2, p.size, p.size)
+        break
+      case 'chip':
+        ctx.fillStyle = `rgba(160,120,70,${a})`
+        ctx.fillRect(x - 1.5, y - 0.8, 3, 1.6)
+        break
+      case 'glass':
+        ctx.fillStyle = `rgba(200,225,240,${a})`
+        ctx.fillRect(x - 1, y - 1, 2, 2)
+        break
+      case 'smoke':
+        ctx.fillStyle = `rgba(120,120,120,${a * 0.25})`
+        ctx.beginPath()
+        ctx.arc(x, y, p.size * 3, 0, Math.PI * 2)
+        ctx.fill()
+        break
+      case 'dust':
+        ctx.fillStyle = `rgba(150,140,120,${a * 0.25})`
+        ctx.beginPath()
+        ctx.arc(x, y, p.size * 2, 0, Math.PI * 2)
+        ctx.fill()
+        break
+      case 'splash':
+        ctx.strokeStyle = `rgba(190,210,225,${a * 0.5})`
+        ctx.lineWidth = 0.8
+        ctx.beginPath()
+        ctx.ellipse(x, y, p.size, p.size * 0.5, 0, 0, Math.PI * 2)
+        ctx.stroke()
+        break
+      case 'spark':
+        ctx.fillStyle = `rgba(255,${180 + Math.random() * 60},80,${a})`
+        ctx.fillRect(x - 1, y - 1, 2, 2)
+        break
+    }
+  }
+}
+
+function drawFog(x0, y0, x1, y1) {
+  const fx0 = x0 - 1
+  const fy0 = y0 - 1
+  const w = x1 - x0 + 3
+  const h = y1 - y0 + 3
+  if (fogC.width !== w || fogC.height !== h) {
+    fogC.width = w
+    fogC.height = h
+  }
+  const img = fogG.createImageData(w, h)
+  const d = img.data
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const tx = fx0 + x
+    const ty = fy0 + y
+    const o = (y * w + x) * 4
+    d[o] = 5
+    d[o + 1] = 7
+    d[o + 2] = 11
+    if (!inb(tx, ty)) {
+      d[o + 3] = 255
+      continue
+    }
+    const k = idx(tx, ty)
+    d[o + 3] = !S.seen[k] ? 255 : S.vis[k] ? 0 : 150
+  }
+  fogG.putImageData(img, 0, 0)
+  ctx.imageSmoothingEnabled = true
+  ctx.drawImage(fogC, fx0 * TS - TS / 2, fy0 * TS - TS / 2 - 6, w * TS, h * TS)
+}
+
+function buildingSeen(b) {
+  for (const [x, y] of [[b.x, b.y], [b.x + b.w - 1, b.y], [b.x, b.y + b.h - 1], [b.x + b.w - 1, b.y + b.h - 1], [b.x + (b.w >> 1), b.y], [b.x + (b.w >> 1), b.y + b.h - 1], [b.x, b.y + (b.h >> 1)], [b.x + b.w - 1, b.y + (b.h >> 1)]]) {
+    if (S.seen[idx(x, y)]) return true
+  }
+  return false
+}
+
+function buildingVisible(b) {
+  for (let x = b.x; x < b.x + b.w; x++) if (S.vis[idx(x, b.y)] || S.vis[idx(x, b.y + b.h - 1)]) return true
+  for (let y = b.y; y < b.y + b.h; y++) if (S.vis[idx(b.x, y)] || S.vis[idx(b.x + b.w - 1, y)]) return true
+  return false
+}
+
+function drawRoofs(x0, y0, x1, y1) {
+  const p = S.player
+  const inside = playerBuilding()
+  for (const b of W.buildings) {
+    if (b.x > x1 + 1 || b.y > y1 + 2 || b.x + b.w < x0 - 1 || b.y + b.h < y0 - 1) continue
+    if (!buildingSeen(b)) continue
+    const target = b.id === inside ? 0 : 1
+    const cur = roofFade[b.id] ?? target
+    const a = cur + (target - cur) * 0.18
+    roofFade[b.id] = a
+    if (a < 0.02) continue
+    const sp = roofSprite(b)
+    const rx = b.x * TS - 5
+    const ry = b.y * TS - WALL_H - 5
+    const w = b.w * TS + 10
+    const h = b.h * TS + 10
+    ctx.globalAlpha = a
+    ctx.drawImage(sp, rx, ry, w, h)
+    if (!buildingVisible(b)) {
+      ctx.fillStyle = 'rgba(5,7,11,0.5)'
+      ctx.fillRect(rx, ry, w, h)
+    }
+    ctx.globalAlpha = 1
+  }
+}
+
+function drawTargetMark() {
+  if (!target || S.sleeping) return
+  const t = performance.now() / 1000
+  ctx.strokeStyle = `rgba(240,215,140,${0.65 + Math.sin(t * 5) * 0.25})`
+  ctx.lineWidth = 1.6
+  if (target.kind === 'corpse') {
+    ctx.beginPath()
+    ctx.arc(target.x * TS, target.y * TS, 15, 0, Math.PI * 2)
+    ctx.stroke()
+    return
+  }
+  let x = (target.x - 0.5) * TS
+  let y = (target.y - 0.5) * TS
+  let w = TS
+  let h = TS
+  if (target.kind === 'car') {
+    const c = W.cars[target.car]
+    x = c.x * TS
+    y = c.y * TS
+    w = c.horiz ? TS * 2 : TS
+    h = c.horiz ? TS : TS * 2
+  }
+  const tall = ['container', 'stove', 'door', 'window', 'sink', 'bed', 'collector'].includes(target.kind)
+  if (tall) {
+    y -= 10
+    h += 10
+  }
+  const L = 7
+  ctx.beginPath()
+  for (const [cx, cy, dx, dy] of [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]]) {
+    ctx.moveTo(cx + dx * L, cy)
+    ctx.lineTo(cx, cy)
+    ctx.lineTo(cx, cy + dy * L)
+  }
+  ctx.stroke()
+}
+
+function ambientParticles(dt) {
+  if (S.sleeping) return
+  const p = S.player
+  for (const k in W.furn) {
+    const f = W.furn[k]
+    if (f.kind !== 'campfire' || f.fuel <= 0) continue
+    const [fx, fy] = tileCenter(+k)
+    if (Math.abs(fx - p.x) > 25 || Math.abs(fy - p.y) > 18) continue
+    if (Math.random() < dt * 6) S.parts.push({ type: 'smoke', x: fx + rand(-0.1, 0.1), y: fy, z: 0.4, vx: 0, vy: 0, vz: 0, life: 2.5, max: 2.5, size: 1 })
+    if (Math.random() < dt * 8) S.parts.push({ type: 'spark', x: fx, y: fy, z: 0.3, vx: rand(-0.4, 0.4), vy: rand(-0.4, 0.4), vz: rand(1.5, 3), life: 0.7, max: 0.7, size: 1 })
+  }
+  if (S.rain.on) {
+    for (let i = 0; i < 6; i++) {
+      const x = p.x + rand(-cw / 2, cw / 2) / zoom / TS
+      const y = p.y + rand(-ch / 2, ch / 2) / zoom / TS
+      if (!inb(Math.floor(x), Math.floor(y)) || W.bld[idx(Math.floor(x), Math.floor(y))] >= 0) continue
+      S.parts.push({ type: 'splash', x, y, z: 0, vx: 0, vy: 0, vz: 0, life: 0.3, max: 0.3, size: 0.5 })
+    }
+  }
+}
+
 function render() {
   const dpr = canvas.dpr
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.fillStyle = '#05070a'
   ctx.fillRect(0, 0, cw, ch)
-  if (!S) return
+  if (!S || !ground) return
   const p = S.player
   const lookX = clamp((mouse.sx - cw / 2) / zoom, -cw, cw) * 0.12
   const lookY = clamp((mouse.sy - ch / 2) / zoom, -ch, ch) * 0.12
-  camX += (p.x * TS + (S.sleeping ? 0 : lookX) - camX) * 0.15
-  camY += (p.y * TS + (S.sleeping ? 0 : lookY) - camY) * 0.15
-  if (Math.abs(camX - p.x * TS) > 600) { camX = p.x * TS; camY = p.y * TS }
-  ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, dpr * (cw / 2 - camX * zoom), dpr * (ch / 2 - camY * zoom))
+  camX += (p.x * TS + (S.sleeping ? 0 : lookX) - camX) * 0.12
+  camY += (p.y * TS + (S.sleeping ? 0 : lookY) - camY) * 0.12
+  if (Math.abs(camX - p.x * TS) > 600 || Math.abs(camY - p.y * TS) > 600) {
+    camX = p.x * TS
+    camY = p.y * TS
+  }
+  const sx = Math.round((cw / 2 - camX * zoom) * dpr) / dpr
+  const sy = Math.round((ch / 2 - camY * zoom) * dpr) / dpr
+  ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, dpr * sx, dpr * sy)
+  ctx.imageSmoothingEnabled = true
   const x0 = Math.max(0, Math.floor((camX - cw / 2 / zoom) / TS) - 1)
   const y0 = Math.max(0, Math.floor((camY - ch / 2 / zoom) / TS) - 1)
   const x1 = Math.min(W.w - 1, Math.ceil((camX + cw / 2 / zoom) / TS) + 1)
   const y1 = Math.min(W.h - 1, Math.ceil((camY + ch / 2 / zoom) / TS) + 2)
   const now = performance.now() / 1000
-  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-    const k = idx(x, y)
-    if (!S.seen[k]) continue
-    drawGround(x, y, k, now)
-  }
+  ground.draw(ctx, x0, y0, x1, y1, S.warm ? 2 : 999)
+  S.warm = true
+  drawWater(x0, y0, x1, y1, now)
+  drawPlants(x0, y0, x1, y1, now)
   for (const b of S.blood) {
-    if (!S.vis[idx(Math.floor(b.x), Math.floor(b.y))]) continue
-    ctx.fillStyle = 'rgba(92,14,12,0.75)'
-    ctx.beginPath()
-    ctx.ellipse(b.x * TS, b.y * TS, b.r * TS, b.r * TS * 0.7, b.x, 0, Math.PI * 2)
-    ctx.fill()
+    if (b.x < x0 - 1 || b.x > x1 + 1 || b.y < y0 - 1 || b.y > y1 + 1) continue
+    if (!S.seen[idx(Math.floor(b.x), Math.floor(b.y))]) continue
+    if (b.r >= 0.11) {
+      const s = b.r * TS * 2.8
+      ctx.save()
+      ctx.translate(b.x * TS, b.y * TS)
+      ctx.rotate((b.v || 0) * 0.37)
+      ctx.globalAlpha = 0.85
+      ctx.drawImage(splatSprite((b.v || 0) % 6), -s / 2, -s / 2, s, s)
+      ctx.restore()
+    } else {
+      ctx.fillStyle = 'rgba(90,12,10,0.8)'
+      ctx.beginPath()
+      ctx.arc(b.x * TS, b.y * TS, Math.max(0.8, b.r * TS), 0, Math.PI * 2)
+      ctx.fill()
+    }
   }
+  ctx.globalAlpha = 1
   for (const k in S.ground) {
-    const items = S.ground[k]
-    if (!items.length || !S.vis[k]) continue
+    if (!S.ground[k].length || !S.seen[k]) continue
     const [gx, gy] = tileCenter(+k)
-    ctx.fillStyle = '#b89a62'
-    ctx.fillRect(gx * TS - 6, gy * TS - 4, 12, 9)
-    ctx.fillStyle = '#7a6440'
-    ctx.fillRect(gx * TS - 6, gy * TS - 4, 12, 3)
+    if (gx < x0 || gx > x1 + 1 || gy < y0 || gy > y1 + 1) continue
+    drawSack(gx * TS, gy * TS + 4)
   }
   for (const c of S.corpses) {
+    if (c.x < x0 - 1 || c.x > x1 + 1 || c.y < y0 - 1 || c.y > y1 + 1) continue
     if (!S.vis[idx(Math.floor(c.x), Math.floor(c.y))]) continue
-    drawBody(c.x, c.y, c.dir, SHIRTS[c.shirt], '#6f7a62', true, false)
+    drawCorpse(c)
   }
-  const ents = []
+  const rows = {}
+  const push = (y, fn) => {
+    const r = Math.floor(y)
+    ;(rows[r] || (rows[r] = [])).push([y, fn])
+  }
   for (const z of S.zombies) {
-    if (z.x < x0 - 1 || z.x > x1 + 1 || z.y < y0 - 1 || z.y > y1 + 1) continue
+    if (z.x < x0 - 1 || z.x > x1 + 1 || z.y < y0 - 1 || z.y > y1 + 2) continue
     if (!S.vis[idx(Math.floor(z.x), Math.floor(z.y))]) continue
-    ents.push(z)
+    push(z.y, () => drawZombie(z))
   }
-  ents.sort((a, b) => a.y - b.y)
-  for (const z of ents) {
-    const skins = ['#7d8a6c', '#8a8c70', '#6c7a68']
-    drawBody(z.x, z.y, z.dir, z.hit > 0 ? '#c24a3a' : SHIRTS[z.shirt], skins[z.skin], z.down > 0, z.st === 'chase', z)
+  if (!(S.over && S.player.infected)) push(p.y, () => drawPlayerChar(p))
+  const lampRows = {}
+  for (const l of W.lamps) {
+    if (l.x < x0 - 1 || l.x > x1 + 1 || l.y < y0 || l.y > y1 + 2) continue
+    if (!S.seen[idx(Math.floor(l.x), Math.floor(l.y))]) continue
+    push(l.y, () => drawLampPole(l))
+    ;(lampRows[Math.floor(l.y)] || (lampRows[Math.floor(l.y)] = [])).push(l)
   }
-  if (!S.over || S.player.infected === false) drawPlayer(p)
+  const drawnCars = new Set()
+  const trees = []
+  for (let y = y0; y <= y1 + 1 && y < W.h; y++) {
+    const list = rows[y]
+    if (list) {
+      list.sort((a, b) => a[0] - b[0])
+      for (const [, fn] of list) fn()
+    }
+    for (let x = x0; x <= x1; x++) {
+      const k = idx(x, y)
+      if (!S.seen[k]) continue
+      const t = W.tiles[k]
+      if (t === T.WALL || t === T.WOODWALL) drawWallTile(x, y, k)
+      else if (t === T.WINDOW) drawWindowTile(x, y, k)
+      else if (t === T.DOOR) drawDoorTile(x, y, k)
+      else if (t === T.FURN) drawFurnTile(x, y, k, now)
+      else if (t === T.TREE) {
+        drawTreeBase(x, y)
+        trees.push([x, y])
+      } else if (t === T.CAR) {
+        const ci = W.carAt[k]
+        if (!drawnCars.has(ci)) {
+          const c = W.cars[ci]
+          const lastY = c.horiz ? c.y : c.y + 1
+          if (y === lastY) {
+            drawnCars.add(ci)
+            drawCar(c)
+          }
+        }
+      }
+    }
+  }
+  drawParts()
+  for (const [x, y] of trees) drawCanopy(x, y, now)
+  for (const r in lampRows) for (const l of lampRows[r]) drawLampHead(l)
   for (const t of S.tracers) {
     ctx.strokeStyle = `rgba(255,230,160,${t.t * 10})`
-    ctx.lineWidth = 1.5
+    ctx.lineWidth = 1.4
     ctx.beginPath()
     ctx.moveTo(t.x0 * TS, t.y0 * TS)
     ctx.lineTo(t.x1 * TS, t.y1 * TS)
     ctx.stroke()
   }
-  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-    const k = idx(x, y)
-    if (!S.seen[k]) continue
-    drawStructure(x, y, k, now)
+  for (const f of S.flashes) {
+    ctx.save()
+    ctx.globalCompositeOperation = 'lighter'
+    const g = ctx.createRadialGradient(f.x * TS, f.y * TS, 0, f.x * TS, f.y * TS, 16)
+    g.addColorStop(0, 'rgba(255,240,180,1)')
+    g.addColorStop(1, 'rgba(255,160,40,0)')
+    ctx.fillStyle = g
+    ctx.fillRect(f.x * TS - 16, f.y * TS - 16, 32, 32)
+    ctx.restore()
   }
-  ctx.fillStyle = 'rgba(6,8,12,0.62)'
-  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-    const k = idx(x, y)
-    if (S.seen[k] && !S.vis[k]) ctx.fillRect(x * TS, y * TS - (opaqueTall(k) ? 10 : 0), TS, TS + (opaqueTall(k) ? 10 : 0))
-  }
-  if (target && !S.sleeping) {
-    ctx.strokeStyle = 'rgba(240,220,160,0.75)'
-    ctx.lineWidth = 1.5
-    if (target.kind === 'corpse') {
-      ctx.beginPath()
-      ctx.arc(target.x * TS, target.y * TS, 14, 0, Math.PI * 2)
-      ctx.stroke()
-    } else ctx.strokeRect((target.x - 0.5) * TS + 1, (target.y - 0.5) * TS + 1, TS - 2, TS - 2)
-  }
+  drawFog(x0, y0, x1, y1)
+  drawRoofs(x0, y0, x1, y1)
+  drawTargetMark()
   for (const r of S.rings) {
-    ctx.strokeStyle = `rgba(230,200,140,${(1 - r.t / 0.8) * 0.35})`
-    ctx.lineWidth = 2
+    ctx.strokeStyle = `rgba(230,200,140,${(1 - r.t / 0.8) * 0.3})`
+    ctx.lineWidth = 1.5
     ctx.beginPath()
     ctx.arc(r.x * TS, r.y * TS, (r.t / 0.8) * Math.min(r.r, 14) * TS, 0, Math.PI * 2)
     ctx.stroke()
   }
   if (S.heli.active) {
-    ctx.fillStyle = 'rgba(0,0,0,0.25)'
+    ctx.fillStyle = 'rgba(0,0,0,0.3)'
+    ctx.save()
+    ctx.translate(S.heli.x * TS, S.heli.y * TS)
+    ctx.rotate(S.heli.ang)
     ctx.beginPath()
-    ctx.ellipse(S.heli.x * TS, S.heli.y * TS, 40, 16, S.heli.ang, 0, Math.PI * 2)
+    ctx.ellipse(0, 0, 40, 13, 0, 0, Math.PI * 2)
     ctx.fill()
+    ctx.fillRect(30, -3, 30, 6)
+    ctx.rotate(now * 20)
+    ctx.fillStyle = 'rgba(0,0,0,0.12)'
+    ctx.fillRect(-60, -3, 120, 6)
+    ctx.restore()
   }
   if (p.action) {
-    const w = 40
-    ctx.fillStyle = 'rgba(0,0,0,0.6)'
-    ctx.fillRect(p.x * TS - w / 2, p.y * TS - 30, w, 6)
+    const w = 42
+    ctx.fillStyle = 'rgba(0,0,0,0.65)'
+    ctx.beginPath()
+    ctx.roundRect(p.x * TS - w / 2 - 1, p.y * TS - 33, w + 2, 7, 3)
+    ctx.fill()
     ctx.fillStyle = '#d8b25a'
-    ctx.fillRect(p.x * TS - w / 2 + 1, p.y * TS - 29, (w - 2) * clamp(p.action.t / p.action.dur, 0, 1), 4)
+    ctx.fillRect(p.x * TS - w / 2 + 1, p.y * TS - 31, (w - 2) * clamp(p.action.t / p.action.dur, 0, 1), 3)
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-  drawDarkness(now)
+  drawLighting(now)
+  grade()
   if (S.rain.on) drawRain(now)
+  post(now)
+}
+
+function lightList() {
+  const p = S.player
+  const L = []
+  const night = isNight()
+  const power = !S.powerOff
+  for (const k in W.furn) {
+    const f = W.furn[k]
+    if (f.kind === 'campfire' && f.fuel > 0) {
+      const [fx, fy] = tileCenter(+k)
+      if (Math.abs(fx - p.x) < 40 && Math.abs(fy - p.y) < 30) L.push({ x: fx, y: fy - 0.2, r: 6 + Math.sin(performance.now() / 90) * 0.25, i: 0.95, c: [255, 140, 50] })
+    }
+  }
+  if (night && power) {
+    for (const l of W.lamps) {
+      if (Math.abs(l.x - p.x) < 30 && Math.abs(l.y - p.y) < 22) L.push({ x: l.x + 0.3, y: l.y - 0.6, r: 5.2, i: 0.9, c: [255, 200, 110] })
+    }
+    const inside = playerBuilding()
+    for (const b of W.buildings) {
+      if (!b.lit || Math.abs(b.x - p.x) > 36 || Math.abs(b.y - p.y) > 26) continue
+      if (b.id === inside) {
+        for (const r of b.rooms.length ? b.rooms : [{ x: b.x + 1, y: b.y + 1, w: b.w - 2, h: b.h - 2 }]) L.push({ x: r.x + r.w / 2, y: r.y + r.h / 2, r: Math.max(r.w, r.h) * 0.85, i: 0.92, c: [255, 210, 150] })
+      }
+      if (b.id === inside) continue
+      const y = b.y + b.h - 1
+      for (let x = b.x; x < b.x + b.w; x++) {
+        const k = idx(x, y)
+        if (W.tiles[k] === T.WINDOW && W.windows[k].bars.length < 2 && !(W.windows[k].curtain && W.windows[k].state === 'closed')) L.push({ x: x + 0.5, y: y + 1, r: 1.9, i: 0.5, c: [255, 196, 120] })
+      }
+    }
+  }
+  for (const f of S.flashes) L.push({ x: f.x, y: f.y, r: 7, i: 1, c: [255, 210, 120] })
+  return L
+}
+
+function drawLighting(now) {
+  const dl = daylight()
+  const p = S.player
+  let a = (1 - dl) * 0.93
+  if (S.rain.on) a = Math.max(a, 0.22)
+  if (a <= 0.01) return
+  const sc = 0.5
+  dctx.setTransform(1, 0, 0, 1, 0, 0)
+  dctx.globalCompositeOperation = 'source-over'
+  dctx.clearRect(0, 0, dark.width, dark.height)
+  dctx.fillStyle = `rgba(6,9,22,${a})`
+  dctx.fillRect(0, 0, dark.width, dark.height)
+  dctx.globalCompositeOperation = 'destination-out'
+  const toS = (wx, wy) => [((wx * TS - camX) * zoom + cw / 2) * sc, ((wy * TS - camY) * zoom + ch / 2) * sc]
+  const hole = (wx, wy, r, inten) => {
+    const [sx, sy] = toS(wx, wy)
+    const rr = r * TS * zoom * sc
+    const g = dctx.createRadialGradient(sx, sy, 0, sx, sy, rr)
+    g.addColorStop(0, `rgba(0,0,0,${inten})`)
+    g.addColorStop(0.5, `rgba(0,0,0,${inten * 0.6})`)
+    g.addColorStop(1, 'rgba(0,0,0,0)')
+    dctx.fillStyle = g
+    dctx.fillRect(sx - rr, sy - rr, rr * 2, rr * 2)
+  }
+  hole(p.x, p.y, hasTrait('catEyes') ? 5.5 : 4, 0.8)
+  const fl = p.light && invFind('flashlight')
+  if (fl) {
+    const [sx, sy] = toS(p.x, p.y)
+    const rr = 15 * TS * zoom * sc
+    const g = dctx.createRadialGradient(sx, sy, 0, sx, sy, rr)
+    g.addColorStop(0, 'rgba(0,0,0,0.98)')
+    g.addColorStop(0.65, 'rgba(0,0,0,0.8)')
+    g.addColorStop(1, 'rgba(0,0,0,0)')
+    dctx.fillStyle = g
+    dctx.beginPath()
+    dctx.moveTo(sx, sy)
+    dctx.arc(sx, sy, rr, p.dir - 0.42, p.dir + 0.42)
+    dctx.closePath()
+    dctx.fill()
+  }
+  const lights = lightList()
+  for (const l of lights) hole(l.x, l.y, l.r, l.i)
+  dctx.globalCompositeOperation = 'source-over'
+  const col = a * 0.17
+  for (const l of lights) {
+    const [sx, sy] = toS(l.x, l.y)
+    const rr = l.r * TS * zoom * sc
+    if (sx < -rr || sy < -rr || sx > dark.width + rr || sy > dark.height + rr) continue
+    const g = dctx.createRadialGradient(sx, sy, 0, sx, sy, rr)
+    g.addColorStop(0, `rgba(${l.c[0]},${l.c[1]},${l.c[2]},${col})`)
+    g.addColorStop(1, `rgba(${l.c[0]},${l.c[1]},${l.c[2]},0)`)
+    dctx.fillStyle = g
+    dctx.fillRect(sx - rr, sy - rr, rr * 2, rr * 2)
+  }
+  if (fl) {
+    const [sx, sy] = toS(p.x, p.y)
+    const rr = 15 * TS * zoom * sc
+    const g = dctx.createRadialGradient(sx, sy, 0, sx, sy, rr)
+    g.addColorStop(0, `rgba(255,240,200,${a * 0.18})`)
+    g.addColorStop(1, 'rgba(255,240,200,0)')
+    dctx.fillStyle = g
+    dctx.beginPath()
+    dctx.moveTo(sx, sy)
+    dctx.arc(sx, sy, rr, p.dir - 0.42, p.dir + 0.42)
+    dctx.fill()
+  }
+  ctx.save()
+  ctx.imageSmoothingEnabled = true
+  ctx.drawImage(dark, 0, 0, cw, ch)
+  ctx.restore()
+}
+
+let vigC = null
+function vignette() {
+  if (vigC && vigC.width === Math.ceil(cw / 2) && vigC.height === Math.ceil(ch / 2)) return vigC
+  vigC = makeCanvas(cw / 2, ch / 2)
+  const g = vigC.getContext('2d')
+  const w = vigC.width
+  const h = vigC.height
+  const v = g.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.35, w / 2, h / 2, Math.max(w, h) * 0.75)
+  v.addColorStop(0, 'rgba(0,0,0,0)')
+  v.addColorStop(1, 'rgba(0,0,0,0.55)')
+  g.fillStyle = v
+  g.fillRect(0, 0, w, h)
+  return vigC
+}
+
+function grade() {
+  const dl = daylight()
+  if (dl > 0 && dl < 1) {
+    ctx.fillStyle = `rgba(255,140,70,${(1 - Math.abs(dl - 0.5) * 2) * 0.16})`
+    ctx.fillRect(0, 0, cw, ch)
+  }
+  ctx.fillStyle = S.rain.on ? 'rgba(60,80,100,0.16)' : `rgba(255,220,170,${0.05 * dl})`
+  ctx.fillRect(0, 0, cw, ch)
+}
+
+function drawRain(now) {
+  if (rainDrops.length < 320) for (let i = 0; i < 320; i++) rainDrops.push({ x: Math.random(), y: Math.random(), s: rand(0.8, 1.3), l: rand(10, 18) })
+  ctx.strokeStyle = 'rgba(180,200,220,0.3)'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  for (const d of rainDrops) {
+    const y = ((d.y + now * d.s * 1.5) % 1) * (ch + 40) - 20
+    const x = ((d.x + now * 0.06 * d.s) % 1) * (cw + 40) - 20
+    ctx.moveTo(x, y)
+    ctx.lineTo(x - 3.5, y + d.l)
+  }
+  ctx.stroke()
+}
+
+function post(now) {
+  const p = S.player
+  ctx.drawImage(vignette(), 0, 0, cw, ch)
   if (p.hurtFlash > 0) {
     const g = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.25, cw / 2, ch / 2, Math.max(cw, ch) * 0.65)
     g.addColorStop(0, 'rgba(150,0,0,0)')
@@ -2139,7 +3201,7 @@ function render() {
     ctx.fillStyle = 'rgba(0,0,0,0.82)'
     ctx.fillRect(0, 0, cw, ch)
     ctx.fillStyle = '#d8cfbf'
-    ctx.font = '600 22px "Special Elite", monospace'
+    ctx.font = '22px "Special Elite", monospace'
     ctx.textAlign = 'center'
     ctx.fillText(`Dormindo... ${clockStr()}`, cw / 2, ch / 2)
     ctx.font = '14px "IBM Plex Mono", monospace'
@@ -2147,509 +3209,6 @@ function render() {
     ctx.fillText('Esc para acordar', cw / 2, ch / 2 + 28)
     ctx.textAlign = 'left'
   }
-}
-
-function opaqueTall(k) {
-  const t = W.tiles[k]
-  return t === T.WALL || t === T.WOODWALL || t === T.DOOR || t === T.WINDOW
-}
-
-const GRASS = ['#3b4a2b', '#3f4e2e', '#38462a', '#425231']
-const WOOD = ['#6b5137', '#6f553a', '#684e35', '#725839']
-
-function floorColor(x, y, k) {
-  const f = W.floor[k]
-  if (f === 1) return (x + y) % 2 ? '#8e908a' : '#9a9c95'
-  if (f === 3) return '#5f605b'
-  return WOOD[W.shade[k]]
-}
-
-function drawGround(x, y, k, now) {
-  let t = W.tiles[k]
-  const px = x * TS
-  const py = y * TS
-  if (t === T.FURN && W.furn[k] && W.furn[k].base !== undefined) t = W.furn[k].base
-  if (t === T.WOODWALL && W.woodwalls[k]) t = W.woodwalls[k].base
-  if (W.bld[k] >= 0 && t !== T.GRASS && t !== T.DIRT) {
-    ctx.fillStyle = floorColor(x, y, k)
-    ctx.fillRect(px, py, TS, TS)
-    if (W.floor[k] === 0) {
-      ctx.fillStyle = 'rgba(0,0,0,0.12)'
-      ctx.fillRect(px, py + 10, TS, 1)
-      ctx.fillRect(px, py + 21, TS, 1)
-    }
-    return
-  }
-  switch (t) {
-    case T.ROAD:
-      ctx.fillStyle = W.shade[k] === 0 ? '#2a2b2e' : '#2d2e31'
-      ctx.fillRect(px, py, TS, TS)
-      if (W.shade[k] === 3 && (x * 7 + y * 13) % 11 === 0) {
-        ctx.strokeStyle = 'rgba(0,0,0,0.35)'
-        ctx.beginPath()
-        ctx.moveTo(px + 6, py + 8)
-        ctx.lineTo(px + 18, py + 14)
-        ctx.lineTo(px + 22, py + 26)
-        ctx.stroke()
-      }
-      break
-    case T.SIDEWALK:
-      ctx.fillStyle = '#69665f'
-      ctx.fillRect(px, py, TS, TS)
-      ctx.fillStyle = 'rgba(0,0,0,0.15)'
-      ctx.fillRect(px, py, TS, 1)
-      ctx.fillRect(px, py, 1, TS)
-      break
-    case T.PARKING:
-      ctx.fillStyle = '#3a3b3e'
-      ctx.fillRect(px, py, TS, TS)
-      if (x % 3 === 0) {
-        ctx.fillStyle = 'rgba(220,220,200,0.25)'
-        ctx.fillRect(px, py, 2, TS)
-      }
-      break
-    case T.WATER: {
-      ctx.fillStyle = '#26465a'
-      ctx.fillRect(px, py, TS, TS)
-      ctx.fillStyle = `rgba(160,200,220,${0.06 + 0.05 * Math.sin(now * 1.5 + x * 0.7 + y * 0.5)})`
-      ctx.fillRect(px + 4, py + 10 + Math.sin(now + x) * 3, 14, 2)
-      break
-    }
-    case T.DIRT:
-      ctx.fillStyle = '#56402d'
-      ctx.fillRect(px, py, TS, TS)
-      ctx.fillStyle = 'rgba(0,0,0,0.2)'
-      for (let i = 4; i < TS; i += 8) ctx.fillRect(px + 2, py + i, TS - 4, 2)
-      if (W.plots[k]) drawPlant(px, py, W.plots[k].stage)
-      break
-    default:
-      ctx.fillStyle = GRASS[W.shade[k]]
-      ctx.fillRect(px, py, TS, TS)
-      if (W.shade[k] === 2) {
-        ctx.fillStyle = 'rgba(90,110,60,0.5)'
-        ctx.fillRect(px + 8, py + 12, 2, 4)
-        ctx.fillRect(px + 20, py + 22, 2, 4)
-      }
-  }
-}
-
-function drawPlant(px, py, stage) {
-  const colors = ['#6e8a3a', '#7aa040', '#86b04a', '#9cc050']
-  ctx.fillStyle = colors[stage]
-  const s = 3 + stage * 3
-  for (const [ox, oy] of [[9, 9], [23, 9], [9, 23], [23, 23]]) {
-    ctx.beginPath()
-    ctx.arc(px + ox, py + oy, s / 2, 0, Math.PI * 2)
-    ctx.fill()
-    if (stage >= 3) {
-      ctx.fillStyle = '#c0603a'
-      ctx.beginPath()
-      ctx.arc(px + ox + 2, py + oy + 1, 2, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.fillStyle = colors[stage]
-    }
-  }
-}
-
-function siding(k) {
-  const b = W.bld[k]
-  if (b < 0) return ['#7a6a55', '#4a3f32']
-  const t = W.buildings[b].type
-  if (t === 'market' || t === 'pharmacy' || t === 'hardware') return ['#9a9a94', '#55554f']
-  if (t === 'police') return ['#7f8a9a', '#454c57']
-  if (t === 'shed') return ['#8a6a48', '#4f3c28']
-  return SIDING[b % SIDING.length]
-}
-
-function wallOrient(x, y) {
-  const l = tileAt(x - 1, y)
-  const r = tileAt(x + 1, y)
-  const isW = t => t === T.WALL || t === T.WINDOW || t === T.DOOR || t === T.WOODWALL
-  return isW(l) || isW(r) ? 'h' : 'v'
-}
-
-function drawBars(px, py, n, orient) {
-  ctx.fillStyle = '#9c7a4c'
-  ctx.strokeStyle = '#5a4428'
-  ctx.lineWidth = 1
-  for (let i = 0; i < n; i++) {
-    ctx.save()
-    ctx.translate(px + TS / 2, py + TS / 2 - 5)
-    ctx.rotate((i % 2 ? 0.35 : -0.35) + (orient === 'v' ? Math.PI / 2 : 0))
-    ctx.fillRect(-TS * 0.6, -3 + (i - 1.5) * 4, TS * 1.2, 5)
-    ctx.strokeRect(-TS * 0.6, -3 + (i - 1.5) * 4, TS * 1.2, 5)
-    ctx.restore()
-  }
-}
-
-function drawStructure(x, y, k, now) {
-  const t = W.tiles[k]
-  const px = x * TS
-  const py = y * TS
-  const H = 10
-  if (t === T.WALL || t === T.WOODWALL) {
-    const [top, front] = t === T.WOODWALL ? ['#a07c4e', '#6a5032'] : siding(k)
-    ctx.fillStyle = front
-    ctx.fillRect(px, py + TS - H, TS, H)
-    ctx.fillStyle = top
-    ctx.fillRect(px, py - H, TS, TS)
-    ctx.fillStyle = 'rgba(0,0,0,0.15)'
-    ctx.fillRect(px, py - H, TS, 2)
-    if (t === T.WOODWALL) {
-      ctx.fillStyle = 'rgba(0,0,0,0.2)'
-      for (let i = 6; i < TS; i += 8) ctx.fillRect(px, py - H + i, TS, 1)
-    }
-    return
-  }
-  if (t === T.DOOR) {
-    const d = W.doors[k]
-    const o = wallOrient(x, y)
-    const [top, front] = siding(k)
-    if (o === 'h') {
-      ctx.fillStyle = front
-      ctx.fillRect(px, py + TS - H, 3, H)
-      ctx.fillRect(px + TS - 3, py + TS - H, 3, H)
-      ctx.fillStyle = top
-      ctx.fillRect(px, py - H, 3, TS)
-      ctx.fillRect(px + TS - 3, py - H, 3, TS)
-    } else {
-      ctx.fillStyle = top
-      ctx.fillRect(px, py - H, TS, 3)
-      ctx.fillRect(px, py + TS - H - 3, TS, 3)
-    }
-    if (d.broken) {
-      ctx.fillStyle = '#5a3f26'
-      ctx.fillRect(px + 4, py + 6, 8, 3)
-      ctx.fillRect(px + 16, py + 18, 10, 3)
-    } else if (!d.open) {
-      ctx.fillStyle = '#6a4a2c'
-      if (o === 'h') ctx.fillRect(px + 3, py + TS / 2 - 8, TS - 6, 10)
-      else ctx.fillRect(px + TS / 2 - 5, py - H + 3, 10, TS - 6)
-      ctx.fillStyle = '#c9a85a'
-      if (o === 'h') ctx.fillRect(px + TS - 9, py + TS / 2 - 4, 3, 3)
-      else ctx.fillRect(px + TS / 2 - 1, py + TS - H - 9, 3, 3)
-    } else {
-      ctx.fillStyle = '#5c4126'
-      if (o === 'h') ctx.fillRect(px + 3, py - 4, 4, TS - 6)
-      else ctx.fillRect(px + 3, py + TS - H - 7, TS - 6, 4)
-    }
-    if (d.bars.length) drawBars(px, py, d.bars.length, o)
-    return
-  }
-  if (t === T.WINDOW) {
-    const w = W.windows[k]
-    const [top, front] = siding(k)
-    ctx.fillStyle = front
-    ctx.fillRect(px, py + TS - H, TS, H)
-    ctx.fillStyle = top
-    ctx.fillRect(px, py - H, TS, TS)
-    const o = wallOrient(x, y)
-    const gx = o === 'h' ? px + 4 : px + TS / 2 - 5
-    const gy = o === 'h' ? py + TS / 2 - 10 : py - H + 4
-    const gw = o === 'h' ? TS - 8 : 10
-    const gh = o === 'h' ? 10 : TS - 8
-    if (w.state === 'broken') {
-      ctx.fillStyle = '#1a1f24'
-      ctx.fillRect(gx, gy, gw, gh)
-      if (!w.cleared) {
-        ctx.fillStyle = 'rgba(180,210,230,0.6)'
-        ctx.beginPath()
-        ctx.moveTo(gx, gy)
-        ctx.lineTo(gx + gw * 0.3, gy + gh * 0.6)
-        ctx.lineTo(gx, gy + gh)
-        ctx.fill()
-      }
-    } else {
-      ctx.fillStyle = w.state === 'open' ? '#1a1f24' : 'rgba(150,190,210,0.85)'
-      ctx.fillRect(gx, gy, gw, gh)
-      if (w.state === 'open') {
-        ctx.fillStyle = 'rgba(150,190,210,0.7)'
-        if (o === 'h') ctx.fillRect(gx, gy, gw / 2, gh)
-        else ctx.fillRect(gx, gy, gw, gh / 2)
-      }
-      if (w.curtain && w.state === 'closed') {
-        ctx.fillStyle = 'rgba(140,60,50,0.85)'
-        if (o === 'h') ctx.fillRect(gx, gy + gh - 4, gw, 4)
-        else ctx.fillRect(gx + gw - 4, gy, 4, gh)
-      }
-    }
-    if (w.bars.length) drawBars(px, py, w.bars.length, o)
-    return
-  }
-  if (t === T.FURN) {
-    const f = W.furn[k]
-    drawFurn(px, py, f, now)
-    return
-  }
-  if (t === T.TREE) {
-    const p = S.player
-    const near = dist(x + 0.5, y + 0.5, p.x, p.y) < 2.2 && p.y < y + 0.6
-    const s = W.shade[k]
-    ctx.globalAlpha = near ? 0.4 : 1
-    ctx.fillStyle = 'rgba(0,0,0,0.25)'
-    ctx.beginPath()
-    ctx.ellipse(px + TS / 2 + 4, py + TS / 2 + 4, 17, 13, 0, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.fillStyle = '#4a3828'
-    ctx.fillRect(px + TS / 2 - 3, py + TS / 2 - 2, 6, 12)
-    ctx.fillStyle = ['#24361f', '#2a3d22', '#22331c', '#2e4426'][s]
-    ctx.beginPath()
-    ctx.arc(px + TS / 2, py + TS / 2 - 8, 17 + s, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.fillStyle = 'rgba(120,150,80,0.18)'
-    ctx.beginPath()
-    ctx.arc(px + TS / 2 - 5, py + TS / 2 - 14, 8, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.globalAlpha = 1
-  }
-}
-
-function drawFurn(px, py, f, now) {
-  const def = FURN[f.kind]
-  const tall = ['fridge', 'wardrobe', 'shelf', 'rack', 'medrack', 'toolrack', 'locker'].includes(f.kind)
-  const lift = tall ? 8 : 3
-  if (f.kind === 'campfire') {
-    ctx.fillStyle = '#3a3a3a'
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2
-      ctx.beginPath()
-      ctx.arc(px + TS / 2 + Math.cos(a) * 10, py + TS / 2 + Math.sin(a) * 10, 4, 0, Math.PI * 2)
-      ctx.fill()
-    }
-    ctx.fillStyle = '#4a3020'
-    ctx.fillRect(px + 9, py + 14, 14, 4)
-    if (f.fuel > 0) {
-      const fl = Math.sin(now * 12) * 2
-      ctx.fillStyle = '#e07a2a'
-      ctx.beginPath()
-      ctx.moveTo(px + 10, py + 20)
-      ctx.lineTo(px + 16, py + 4 + fl)
-      ctx.lineTo(px + 22, py + 20)
-      ctx.fill()
-      ctx.fillStyle = '#f2c14a'
-      ctx.beginPath()
-      ctx.moveTo(px + 13, py + 20)
-      ctx.lineTo(px + 16, py + 10 - fl)
-      ctx.lineTo(px + 19, py + 20)
-      ctx.fill()
-    }
-    return
-  }
-  ctx.fillStyle = 'rgba(0,0,0,0.3)'
-  ctx.fillRect(px + 3, py + 5, TS - 4, TS - 6)
-  ctx.fillStyle = def.color
-  ctx.fillRect(px + 2, py + 2 - lift, TS - 4, TS - 4)
-  ctx.fillStyle = 'rgba(255,255,255,0.12)'
-  ctx.fillRect(px + 2, py + 2 - lift, TS - 4, 3)
-  ctx.fillStyle = 'rgba(0,0,0,0.25)'
-  const k = f.kind
-  if (k === 'bed' || k === 'sofa') {
-    ctx.fillStyle = k === 'bed' ? '#d9d4c7' : 'rgba(0,0,0,0.2)'
-    ctx.fillRect(px + 5, py + 4 - lift, TS - 10, 8)
-  } else if (k === 'fridge') {
-    ctx.fillRect(px + 2, py + 12 - lift, TS - 4, 2)
-    ctx.fillRect(px + TS - 8, py + 5 - lift, 2, 6)
-  } else if (k === 'stove') {
-    ctx.fillStyle = '#2a2c2e'
-    for (const [ox, oy] of [[9, 9], [21, 9], [9, 21], [21, 21]]) {
-      ctx.beginPath()
-      ctx.arc(px + ox, py + oy - lift, 4, 0, Math.PI * 2)
-      ctx.fill()
-    }
-  } else if (k === 'sink') {
-    ctx.fillStyle = '#6f8794'
-    ctx.fillRect(px + 7, py + 7 - lift, TS - 14, TS - 14)
-  } else if (k === 'shelf' || k === 'rack' || k === 'medrack' || k === 'toolrack') {
-    for (let i = 8; i < TS - 4; i += 7) ctx.fillRect(px + 2, py + i - lift, TS - 4, 2)
-  } else if (k === 'wardrobe' || k === 'locker') {
-    ctx.fillRect(px + TS / 2 - 1, py + 4 - lift, 2, TS - 8)
-  } else if (k === 'toolbox') {
-    ctx.fillStyle = '#2a2a2a'
-    ctx.fillRect(px + 10, py + 6 - lift, 12, 3)
-  } else if (k === 'collector') {
-    ctx.fillStyle = '#2a4a5e'
-    ctx.fillRect(px + 6, py + 6 - lift, TS - 12, TS - 12)
-    ctx.fillStyle = '#4a8aaa'
-    const lvlw = clamp((f.water || 0) / 40, 0, 1)
-    ctx.fillRect(px + 6, py + 6 - lift + (TS - 12) * (1 - lvlw), TS - 12, (TS - 12) * lvlw)
-  } else if (k === 'crate' || k === 'shedbox') {
-    ctx.fillRect(px + 2, py + TS / 2 - lift, TS - 4, 2)
-  }
-}
-
-function drawBody(x, y, dir, shirt, skin, down, reaching, z) {
-  const px = x * TS
-  const py = y * TS
-  ctx.save()
-  ctx.translate(px, py)
-  if (down) {
-    ctx.rotate(dir)
-    ctx.fillStyle = 'rgba(70,10,10,0.5)'
-    ctx.beginPath()
-    ctx.ellipse(0, 0, 15, 9, 0, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.fillStyle = shirt
-    ctx.fillRect(-10, -6, 16, 12)
-    ctx.fillStyle = '#2b2b30'
-    ctx.fillRect(-18, -5, 9, 4)
-    ctx.fillRect(-18, 1, 9, 4)
-    ctx.fillStyle = skin
-    ctx.beginPath()
-    ctx.arc(10, 0, 5, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.restore()
-    return
-  }
-  ctx.fillStyle = 'rgba(0,0,0,0.3)'
-  ctx.beginPath()
-  ctx.ellipse(2, 4, 11, 8, 0, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.rotate(dir)
-  if (reaching) {
-    ctx.fillStyle = skin
-    ctx.fillRect(2, -9, 13, 4)
-    ctx.fillRect(2, 5, 13, 4)
-  }
-  ctx.fillStyle = shirt
-  ctx.beginPath()
-  ctx.ellipse(0, 0, 7, 11, 0, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.fillStyle = skin
-  ctx.beginPath()
-  ctx.arc(1, 0, 6, 0, Math.PI * 2)
-  ctx.fill()
-  if (z) {
-    ctx.fillStyle = 'rgba(60,20,15,0.6)'
-    ctx.fillRect(-2, -3, 3, 2)
-    if (z.fem) {
-      ctx.fillStyle = '#3a2e22'
-      ctx.beginPath()
-      ctx.arc(-1, 0, 5.5, Math.PI * 0.5, Math.PI * 1.5)
-      ctx.fill()
-    }
-  }
-  ctx.restore()
-}
-
-function drawPlayer(p) {
-  const px = p.x * TS
-  const py = p.y * TS
-  const { def } = currentWeapon()
-  ctx.save()
-  ctx.translate(px, py)
-  ctx.fillStyle = 'rgba(0,0,0,0.35)'
-  ctx.beginPath()
-  ctx.ellipse(2, 4, 11, 8, 0, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.rotate(p.dir + (p.swing > 0 ? (p.swing / 0.18 - 0.5) * 1.6 : 0))
-  if (def !== FIST) {
-    ctx.strokeStyle = def.cat === 'gun' ? '#1c1c1c' : def.cat === 'blade' ? '#b8b8b0' : '#8a6a42'
-    ctx.lineWidth = def.cat === 'gun' ? 4 : 3
-    ctx.beginPath()
-    ctx.moveTo(6, 6)
-    ctx.lineTo(6 + (def.cat === 'gun' ? 12 : 10 + def.range * 8), 6)
-    ctx.stroke()
-  }
-  ctx.fillStyle = '#c9a07a'
-  ctx.fillRect(4, 4, 7, 4)
-  ctx.fillRect(4, -8, 6, 4)
-  ctx.fillStyle = p.sneak ? '#3d4a3a' : '#3d5f7a'
-  ctx.beginPath()
-  ctx.ellipse(0, 0, 7.5, 11.5, 0, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.fillStyle = '#d2a882'
-  ctx.beginPath()
-  ctx.arc(1, 0, 6, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.fillStyle = '#3a2a1c'
-  ctx.beginPath()
-  ctx.arc(-1, 0, 5.8, Math.PI * 0.55, Math.PI * 1.45)
-  ctx.fill()
-  ctx.restore()
-}
-
-function drawDarkness(now) {
-  const dl = daylight()
-  const p = S.player
-  let a = (1 - dl) * 0.9
-  if (S.rain.on) a = Math.max(a, 0.25)
-  if (a <= 0.01) return
-  const sc = 0.5
-  dctx.setTransform(1, 0, 0, 1, 0, 0)
-  dctx.globalCompositeOperation = 'source-over'
-  dctx.clearRect(0, 0, dark.width, dark.height)
-  dctx.fillStyle = `rgba(4,7,14,${a})`
-  dctx.fillRect(0, 0, dark.width, dark.height)
-  dctx.globalCompositeOperation = 'destination-out'
-  const toS = (wx, wy) => [((wx * TS - camX) * zoom + cw / 2) * sc, ((wy * TS - camY) * zoom + ch / 2) * sc]
-  const light = (wx, wy, r, inten) => {
-    const [sx, sy] = toS(wx, wy)
-    const rr = r * TS * zoom * sc
-    const g = dctx.createRadialGradient(sx, sy, 0, sx, sy, rr)
-    g.addColorStop(0, `rgba(0,0,0,${inten})`)
-    g.addColorStop(1, 'rgba(0,0,0,0)')
-    dctx.fillStyle = g
-    dctx.beginPath()
-    dctx.arc(sx, sy, rr, 0, Math.PI * 2)
-    dctx.fill()
-  }
-  light(p.x, p.y, hasTrait('catEyes') ? 5 : 3.5, 0.85)
-  if (p.light && invFind('flashlight')) {
-    const [sx, sy] = toS(p.x, p.y)
-    const rr = 15 * TS * zoom * sc
-    const g = dctx.createRadialGradient(sx, sy, 0, sx, sy, rr)
-    g.addColorStop(0, 'rgba(0,0,0,0.95)')
-    g.addColorStop(0.7, 'rgba(0,0,0,0.75)')
-    g.addColorStop(1, 'rgba(0,0,0,0)')
-    dctx.fillStyle = g
-    dctx.beginPath()
-    dctx.moveTo(sx, sy)
-    dctx.arc(sx, sy, rr, p.dir - 0.45, p.dir + 0.45)
-    dctx.closePath()
-    dctx.fill()
-  }
-  for (const k in W.furn) {
-    const f = W.furn[k]
-    if (f.kind === 'campfire' && f.fuel > 0) {
-      const [fx, fy] = tileCenter(+k)
-      if (Math.abs(fx - p.x) < 40 && Math.abs(fy - p.y) < 30) light(fx, fy, 5.5 + Math.sin(now * 9) * 0.2, 0.9)
-    }
-  }
-  for (const f of S.flashes) light(f.x, f.y, 7, 0.9)
-  ctx.save()
-  ctx.setTransform(canvas.dpr, 0, 0, canvas.dpr, 0, 0)
-  ctx.imageSmoothingEnabled = true
-  ctx.drawImage(dark, 0, 0, cw, ch)
-  ctx.restore()
-  if (p.light && invFind('flashlight') && a > 0.2) {
-    ctx.save()
-    ctx.globalCompositeOperation = 'lighter'
-    const [sx, sy] = [(p.x * TS - camX) * zoom + cw / 2, (p.y * TS - camY) * zoom + ch / 2]
-    const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, 15 * TS * zoom)
-    g.addColorStop(0, 'rgba(60,50,25,0.15)')
-    g.addColorStop(1, 'rgba(0,0,0,0)')
-    ctx.fillStyle = g
-    ctx.beginPath()
-    ctx.moveTo(sx, sy)
-    ctx.arc(sx, sy, 15 * TS * zoom, p.dir - 0.45, p.dir + 0.45)
-    ctx.fill()
-    ctx.restore()
-  }
-}
-
-let rainDrops = []
-function drawRain(now) {
-  if (rainDrops.length < 220) for (let i = 0; i < 220; i++) rainDrops.push({ x: Math.random(), y: Math.random(), s: rand(0.6, 1.2) })
-  ctx.strokeStyle = 'rgba(170,190,210,0.28)'
-  ctx.lineWidth = 1
-  ctx.beginPath()
-  for (const d of rainDrops) {
-    const y = ((d.y + now * d.s * 1.3) % 1) * ch
-    const x = ((d.x + now * 0.05) % 1) * cw
-    ctx.moveTo(x, y)
-    ctx.lineTo(x - 3, y + 14)
-  }
-  ctx.stroke()
 }
 
 function moodles() {
@@ -2717,7 +3276,7 @@ function drawMap() {
   m.fillStyle = '#0a0c10'
   m.fillRect(0, 0, c.width, c.height)
   const col = {
-    [T.GRASS]: '#33402a', [T.ROAD]: '#25262a', [T.SIDEWALK]: '#55534d', [T.FLOOR]: '#6a5a48', [T.WALL]: '#a09484', [T.DOOR]: '#8a6a42', [T.WINDOW]: '#7aa0b8', [T.TREE]: '#1f2e1a', [T.WATER]: '#2a4a60', [T.FURN]: '#6a5a48', [T.DIRT]: '#5a4430', [T.WOODWALL]: '#a07c4e', [T.PARKING]: '#333438'
+    [T.CAR]: '#7a6a5a', [T.GRASS]: '#33402a', [T.ROAD]: '#25262a', [T.SIDEWALK]: '#55534d', [T.FLOOR]: '#6a5a48', [T.WALL]: '#a09484', [T.DOOR]: '#8a6a42', [T.WINDOW]: '#7aa0b8', [T.TREE]: '#1f2e1a', [T.WATER]: '#2a4a60', [T.FURN]: '#6a5a48', [T.DIRT]: '#5a4430', [T.WOODWALL]: '#a07c4e', [T.PARKING]: '#333438'
   }
   for (let y = 0; y < W.h; y++) for (let x = 0; x < W.w; x++) {
     const k = idx(x, y)
@@ -2764,9 +3323,10 @@ function serialize() {
     woodwalls: W.woodwalls,
     treeHp: W.treeHp,
     alarms: W.buildings.map(b => b.alarm ? 1 : 0),
+    cars: W.cars.map(c => c.items),
     S: {
       settings: S.settings, time: S.time, zombies: S.zombies.map(z => ({ ...z, hit: 0 })), corpses: S.corpses.slice(-150), ground: S.ground,
-      blood: S.blood.slice(-200), kills: S.kills, powerOff: S.powerOff, waterOff: S.waterOff, powerOffAt: S.powerOffAt, waterOffAt: S.waterOffAt,
+      blood: S.blood.filter(b => b.r >= 0.1).slice(-250), kills: S.kills, powerOff: S.powerOff, waterOff: S.waterOff, powerOffAt: S.powerOffAt, waterOffAt: S.waterOffAt,
       heli: S.heli, rain: S.rain, alarms: S.alarms,
       player: { ...p, action: null, equipIdx: p.inv.indexOf(p.equip), equip: null }
     }
@@ -2802,6 +3362,7 @@ function load() {
   W.woodwalls = data.woodwalls || {}
   W.treeHp = data.treeHp || {}
   W.buildings.forEach((b, i) => (b.alarm = !!data.alarms[i]))
+  if (data.cars) W.cars.forEach((c, i) => (c.items = data.cars[i] || null))
   const d = data.S
   S = {
     ...d,
@@ -2824,6 +3385,7 @@ function startGame() {
   $('hud').classList.remove('hidden')
   camX = S.player.x * TS
   camY = S.player.y * TS
+  initGfx()
   computeFlow()
   updateVision()
   renderHud(true)
@@ -2862,7 +3424,10 @@ function showMenu() {
 
 function showCreator() {
   const m = $('menu')
-  const sel = { prof: 'unemployed', traits: [] }
+  const SHIRT_OPTS = ['#3d5f7a', '#7a3a32', '#4a6a3a', '#8a7a4a', '#5a4a6a', '#2e2e32', '#b8b2a4']
+  const HAIR_OPTS = ['#3a2a1c', '#1a1a1a', '#6e4a2a', '#b08a50', '#8a3a1a', '#9a9a92']
+  const SKIN_OPTS = ['#f0c8a0', '#d2a882', '#b07a52', '#8a5a3a', '#5e3c26']
+  const sel = { prof: 'unemployed', traits: [], look: { shirt: SHIRT_OPTS[0], pants: '#2f3440', skin: SKIN_OPTS[1], hair: 1, hairColor: HAIR_OPTS[0] } }
   const draw = () => {
     const prof = PROFESSIONS.find(p => p.id === sel.prof)
     const pts = prof.points - sel.traits.reduce((a, t) => a + TRAITS.find(x => x.id === t).cost, 0)
@@ -2872,6 +3437,13 @@ function showCreator() {
         <div class="grid">
           <section>
             <label>Nome<input id="cname" maxlength="24" value="${sel.name || ''}" placeholder="Sobrevivente"></label>
+            <h3>Aparência</h3>
+            <div class="looks">
+              <div><span>Roupa</span>${SHIRT_OPTS.map(c => `<button class="sw ${sel.look.shirt === c ? 'on' : ''}" data-shirt="${c}" style="background:${c}"></button>`).join('')}</div>
+              <div><span>Pele</span>${SKIN_OPTS.map(c => `<button class="sw ${sel.look.skin === c ? 'on' : ''}" data-skin="${c}" style="background:${c}"></button>`).join('')}</div>
+              <div><span>Cabelo</span>${HAIR_OPTS.map(c => `<button class="sw ${sel.look.hairColor === c ? 'on' : ''}" data-hc="${c}" style="background:${c}"></button>`).join('')}</div>
+              <div><span>Corte</span>${[['Raspado', 0], ['Curto', 1], ['Longo', 2]].map(([n, v]) => `<button class="${sel.look.hair === v ? 'on' : ''}" data-hs="${v}">${n}</button>`).join('')}</div>
+            </div>
             <h3>Profissão</h3>
             <div class="profs">${PROFESSIONS.map(p => `<button data-prof="${p.id}" class="${p.id === sel.prof ? 'on' : ''}"><b>${p.name}</b><span>${p.desc}</span><em>${p.points >= 0 ? '+' : ''}${p.points} pts</em></button>`).join('')}</div>
           </section>
@@ -2894,6 +3466,10 @@ function showCreator() {
           <button id="go" class="primary" ${pts < 0 ? 'disabled' : ''}>Começar</button>
         </div>
       </div>`
+    m.querySelectorAll('[data-shirt]').forEach(b => (b.onclick = () => { sel.name = $('cname').value; sel.look.shirt = b.dataset.shirt; draw() }))
+    m.querySelectorAll('[data-skin]').forEach(b => (b.onclick = () => { sel.name = $('cname').value; sel.look.skin = b.dataset.skin; draw() }))
+    m.querySelectorAll('[data-hc]').forEach(b => (b.onclick = () => { sel.name = $('cname').value; sel.look.hairColor = b.dataset.hc; draw() }))
+    m.querySelectorAll('[data-hs]').forEach(b => (b.onclick = () => { sel.name = $('cname').value; sel.look.hair = +b.dataset.hs; draw() }))
     m.querySelectorAll('[data-prof]').forEach(b => (b.onclick = () => { sel.name = $('cname').value; sel.prof = b.dataset.prof; draw() }))
     m.querySelectorAll('[data-trait]').forEach(b => (b.onclick = () => {
       sel.name = $('cname').value
@@ -2915,6 +3491,7 @@ function showCreator() {
         name: $('cname').value.trim(),
         prof: sel.prof,
         traits: sel.traits,
+        look: sel.look,
         seed: seed || undefined,
         settings: {
           pop: +$('spop').value,
@@ -3060,7 +3637,7 @@ window.addEventListener('mouseup', () => { mouse.down = false })
 canvas.addEventListener('contextmenu', e => e.preventDefault())
 canvas.addEventListener('wheel', e => {
   e.preventDefault()
-  zoom = clamp(zoom * (e.deltaY > 0 ? 0.9 : 1.1), 0.6, 2.2)
+  zoom = clamp(zoom * (e.deltaY > 0 ? 0.9 : 1.1), 0.7, 2.8)
 }, { passive: false })
 window.addEventListener('beforeunload', () => save())
 document.addEventListener('visibilitychange', () => { if (document.hidden) save() })
@@ -3081,5 +3658,6 @@ function frame(t) {
   requestAnimationFrame(frame)
 }
 
+if (location.search.includes('debug')) window.__vm = { get S() { return S }, get W() { return W }, save }
 showMenu()
 requestAnimationFrame(frame)
