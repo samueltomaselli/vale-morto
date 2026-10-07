@@ -1,7 +1,9 @@
 import { ITEMS, SKILLS, PROFESSIONS, TRAITS, RECIPES, LOOT, STACK_AMOUNTS, FURN } from './data.js'
 import { T, createWorld, rollLoot } from './world.js'
-import { sfx, unlockAudio } from './audio.js'
-import { Ground, TS, WALL_H, FURN_LIFT, hash, shade, makeCanvas, furnSprite, treeSprite, carSprite, roofSprite, splatSprite, wallFace, drawChar, HAIRS } from './gfx.js'
+import { sfx, unlockAudio, setAmbience, setVolumes, getVolumes } from './audio.js'
+import { Ground, TS, WALL_H, FURN_LIFT, hash, shade, makeCanvas, furnSprite, treeSprite, carSprite, roofSprite, splatSprite, wallFace } from './gfx.js'
+import { drawChar, HAIRS, OUTFITS } from './chars.js'
+import { iconURL } from './icons.js'
 
 const SAVE_KEY = 'vale-morto-save-v2'
 const START_TIME = 9 * 60
@@ -434,6 +436,30 @@ function moveEntity(e, dx, dy, r, isZombie) {
   return hit
 }
 
+function surfaceAt(x, y) {
+  const k = idx(Math.floor(x), Math.floor(y))
+  let t = W.tiles[k]
+  if (t === T.CAR) t = W.carBase[k]
+  if (t === T.WATER) return 'water'
+  if (t === T.GRASS || t === T.TREE) return 'grass'
+  if (t === T.DIRT) return 'dirt'
+  if (t === T.SIDEWALK) return 'sidewalk'
+  if (t === T.ROAD || t === T.PARKING) return 'road'
+  if (W.bld[k] >= 0) return W.floor[k] === 1 ? 'tile' : W.floor[k] === 3 ? 'concrete' : 'wood'
+  return 'grass'
+}
+
+let ambT = 0
+function updateAudio(dt) {
+  ambT -= dt
+  if (ambT > 0) return
+  ambT = 0.25
+  const p = S.player
+  let chasers = 0
+  for (const z of S.zombies) if (z.st === 'chase' && Math.abs(z.x - p.x) < 16 && Math.abs(z.y - p.y) < 16) chasers++
+  setAmbience({ indoor: playerBuilding() >= 0, rain: S.rain.on, night: daylight() < 0.5, tension: S.over || S.sleeping ? 0 : clamp(chasers / 4, 0, 1) })
+}
+
 function speedMod(x, y, zombie) {
   const k = idx(Math.floor(x), Math.floor(y))
   const t = W.tiles[k]
@@ -584,6 +610,7 @@ function updateZombies(dt) {
   const Z = S.zombies
   for (const z of Z) {
     z.hit = Math.max(0, z.hit - dt)
+    if (z.stag > 0) z.stag -= dt
     if (z.down > 0) {
       z.down -= dt
       if (z.down <= 0) z.stun = 0.6
@@ -632,8 +659,8 @@ function updateZombies(dt) {
     }
     z.groan -= dt
     if (z.groan <= 0) {
-      z.groan = rand(6, 18)
-      if (d < 14) sfx.groan(clamp(0.35 - d * 0.02, 0.04, 0.35))
+      z.groan = z.st === 'chase' ? rand(3, 8) : rand(8, 22)
+      if (d < 26 && !S.sleeping) sfx.groan(clamp(0.34 * (1 - d / 26) ** 1.4, 0.015, 0.34), clamp(dx / -14, -0.9, 0.9))
     }
     let mx = 0
     let my = 0
@@ -703,6 +730,13 @@ function updateZombies(dt) {
       const oy = z.y
       const hit = moveEntity(z, mx * spd * dt, my * spd * dt, 0.28, true)
       const moved = Math.hypot(z.x - ox, z.y - oy)
+      if (z.st === 'chase' && d < 9 && !S.sleeping) {
+        z.stepAcc = (z.stepAcc || 0) + moved
+        if (z.stepAcc > (z.sprinter ? 0.5 : 0.75)) {
+          z.stepAcc = 0
+          sfx.zstep(clamp(1 - d / 9, 0.1, 1), clamp(-dx / 8, -0.9, 0.9))
+        }
+      }
       z.phase = (z.phase || 0) + moved * 4
       z.mv = moved > 0.0005 ? 0.15 : Math.max(0, (z.mv || 0) - dt)
       if (hit >= 0 && z.st !== 'idle' && bashable(hit)) {
@@ -756,6 +790,7 @@ function attackPlayer(z) {
   if (Math.random() > Math.min(0.9, chance)) return
   p.stats.panic = clamp(p.stats.panic + 12, 0, 100)
   p.hurtFlash = 0.35
+  impact('hurt', Math.atan2(p.y - z.y, p.x - z.x))
   sfx.hurt()
   const protect = hasTrait('thickSkin') ? 0.45 : 0.32
   if (Math.random() < protect) {
@@ -789,13 +824,36 @@ function addWound(type, fromZombie) {
   emit('blood', p.x, p.y, 6, { min: 0.4, max: 1.8 })
 }
 
-function killZombie(z, byPlayer = true) {
+function knockDown(z, a, pose) {
+  z.down = rand(1.5, 3)
+  setTimeout(() => sfx.thud(0.8), 260)
+  z.fallDir = a
+  z.fallT0 = performance.now()
+  z.pose = pose
+  emit('dust', z.x + Math.cos(a) * 0.4, z.y + Math.sin(a) * 0.4, 3, { min: 0.1, max: 0.5, vz0: 0, vz1: 0, l0: 0.4, l1: 0.7, s0: 1.5, s1: 3 })
+}
+
+function impact(kind, a) {
+  const strong = kind === 'kill'
+  S.hitstop = Math.max(S.hitstop || 0, strong ? 0.085 : kind === 'gun' ? 0.02 : 0.045)
+  S.shake = Math.max(S.shake || 0, strong ? 5.5 : kind === 'gun' ? 3.5 : kind === 'hurt' ? 6 : 2.6)
+  S.shakeDir = a ?? rand(0, Math.PI * 2)
+}
+
+function killZombie(z, byPlayer = true, pose, a) {
   const i = S.zombies.indexOf(z)
   if (i >= 0) S.zombies.splice(i, 1)
   if (byPlayer) S.kills++
   const items = []
   if (Math.random() < 0.35) for (const it of rollLoot(Math.random, 'corpse', [1, 2], LOOT, ITEMS, STACK_AMOUNTS)) addTo(items, mkItem(it.id, it.qty))
-  S.corpses.push({ x: z.x, y: z.y, dir: z.dir, shirt: z.shirt, items, t: S.time })
+  const dir = a ?? z.dir + Math.PI
+  const wasDown = z.down > 0
+  S.corpses.push({
+    x: z.x, y: z.y, dir: wasDown ? z.fallDir ?? dir : dir, shirt: z.shirt, pants: z.pants, skin: z.skin, hair: z.hair, hc: z.hc, gore: z.gore,
+    outfit: z.outfit, missingArm: z.missingArm, pose: wasDown ? z.pose : pose ?? randi(0, 2), items, t: S.time, born: wasDown ? 0 : performance.now()
+  })
+  if (byPlayer) impact('kill', a)
+  if (!wasDown) setTimeout(() => sfx.thud(1), 280)
   if (S.corpses.length > 300) S.corpses.shift()
   for (let k = 0; k < 2; k++) S.blood.push({ x: z.x + rand(-0.4, 0.4), y: z.y + rand(-0.4, 0.4), r: rand(0.14, 0.3), v: randi(0, 999) })
   emit('blood', z.x, z.y, 6, { min: 0.3, max: 1.5, vz0: 0.5, vz1: 1.8 })
@@ -874,12 +932,15 @@ function playerAttack(shove = false) {
     if (Math.random() < 0.05 + lvl(skill) * 0.025) dmg *= 2
     if (!shove) z.hp -= dmg
     z.hit = 0.2
-    const kb = shove ? 0.55 : def.cat === 'blunt' ? 0.35 : 0.15
+    const kb = shove ? 0.55 : def.cat === 'blunt' ? 0.4 * (def.w >= 1.2 ? 1.25 : 1) : def.chop ? 0.3 : 0.15
     const a = Math.atan2(z.y - p.y, z.x - p.x)
     moveEntity(z, Math.cos(a) * kb, Math.sin(a) * kb, 0.28, true)
     z.stun = Math.max(z.stun, shove ? 0.8 : 0.45)
+    z.stag = 0.3
+    z.kbm = kb / 0.35
     const kd = shove ? 0.35 : def.cat === 'blunt' ? 0.18 + lvl('blunt') * 0.02 : 0.05
-    if (Math.random() < kd) z.down = rand(1.5, 3)
+    if (Math.random() < kd && !(z.down > 0)) knockDown(z, a, shove || def.cat === 'blunt' ? 0 : 2)
+    if (z.hp > 0) impact('hit', a)
     z.st = 'chase'
     z.lx = p.x
     z.ly = p.y
@@ -893,7 +954,7 @@ function playerAttack(shove = false) {
       wearWeapon(item, def, 1)
     }
     if (z.hp <= 0) {
-      killZombie(z)
+      killZombie(z, true, def.cat === 'blunt' ? 0 : def.chop ? randi(0, 2) : 2, a)
       if (!shove) addXP(skill, 4)
     }
   }
@@ -923,6 +984,8 @@ function shoot(item, def) {
   def.pellets ? sfx.shotgun() : sfx.gun()
   makeNoise(p.x, p.y, def.noise, true)
   S.flashes.push({ x: p.x + Math.cos(p.dir) * 0.6, y: p.y + Math.sin(p.dir) * 0.6, t: 0.08 })
+  impact('gun', p.dir + Math.PI)
+  emit('spark', p.x + Math.cos(p.dir) * 0.3, p.y + Math.sin(p.dir) * 0.3, 1, { ang: p.dir + Math.PI / 2, spread: 0.3, min: 1, max: 2, l0: 0.6, l1: 0.8 })
   const n = def.pellets || 1
   const g = lvl('gun')
   for (let i = 0; i < n; i++) {
@@ -952,6 +1015,10 @@ function shoot(item, def) {
       hitZ.hp -= dmg
       hitZ.hit = 0.2
       hitZ.stun = 0.3
+      hitZ.stag = 0.3
+      hitZ.kbm = 1.2
+      moveEntity(hitZ, Math.cos(a) * 0.25, Math.sin(a) * 0.25, 0.28, true)
+      if (Math.random() < 0.15 && !(hitZ.down > 0)) knockDown(hitZ, a, 1)
       hitZ.st = 'chase'
       hitZ.lx = p.x
       hitZ.ly = p.y
@@ -960,7 +1027,7 @@ function shoot(item, def) {
       S.blood.push({ x: hitZ.x + Math.cos(a) * 0.6, y: hitZ.y + Math.sin(a) * 0.6, r: rand(0.12, 0.22), v: randi(0, 999) })
       addXP('gun', 2)
       if (hitZ.hp <= 0) {
-        killZombie(hitZ)
+        killZombie(hitZ, true, 1, a)
         addXP('gun', 4)
       }
     }
@@ -1118,7 +1185,8 @@ function interact() {
       if (S.zombies.some(z => dist(z.x, z.y, cx, cy) < 0.7) || dist(p.x, p.y, cx, cy) < 0.75) return
     }
     d.open = !d.open
-    sfx.door()
+    if (d.open) sfx.creak()
+    else sfx.door()
     makeNoise(tg.x, tg.y, 4)
     return
   }
@@ -1357,7 +1425,8 @@ function itemLabel(it) {
   if (it.spoil) tags.push(isSpoiled(it) ? 'estragado' : it.spoil - S.time < 1440 ? 'passando' : 'fresco')
   if (S.player.equip === it) tags.push('em mãos')
   if (tags.length) s += ` <em>${tags.join(' · ')}</em>`
-  return s
+  const hk = S.player.hot ? S.player.hot.indexOf(it) : -1
+  return `<span class="itrow"><img class="ic" src="${iconURL(it.id)}" alt="">${hk >= 0 ? `<i class="hk">${hk + 1}</i>` : ''}<span class="nm">${s}</span></span>`
 }
 
 function transfer(from, to, it, qty) {
@@ -1384,11 +1453,11 @@ function renderContainer() {
     <div class="cols">
       <div class="col">
         <div class="sub">Conteúdo <button data-a="takeall" ${items.length ? '' : 'disabled'}>Pegar tudo</button></div>
-        <ul>${items.length ? items.map((it, i) => `<li><span>${itemLabel(it)}</span><button data-a="take" data-i="${i}">Pegar</button></li>`).join('') : '<li class="empty">Vazio</li>'}</ul>
+        <ul>${items.length ? items.map((it, i) => `<li data-ci="${i}">${itemLabel(it)}<button data-a="take" data-i="${i}">Pegar</button></li>`).join('') : '<li class="empty">Vazio</li>'}</ul>
       </div>
       <div class="col">
         <div class="sub">Sua mochila <span class="${wgt > cap ? 'bad' : ''}">${wgt.toFixed(1)} / ${cap.toFixed(1)}</span></div>
-        <ul>${p.inv.map((it, i) => `<li><span>${itemLabel(it)}</span><button data-a="put" data-i="${i}">Guardar</button></li>`).join('')}</ul>
+        <ul>${p.inv.map((it, i) => `<li data-pi="${i}">${itemLabel(it)}<button data-a="put" data-i="${i}">Guardar</button></li>`).join('')}</ul>
       </div>
     </div>`
   el.onclick = e => {
@@ -1452,7 +1521,7 @@ function renderPanel() {
       if (d.kind === 'weapon') btns.push(['equip', p.equip === it ? 'Guardar' : 'Equipar'])
       if (it.id === 'flashlight') btns.push(['light', p.light ? 'Desligar' : 'Ligar'])
       btns.push(['drop', 'Largar'])
-      return `<li><span>${itemLabel(it)}</span><span class="btns">${btns.map(([a, l]) => `<button data-a="${a}" data-i="${i}">${l}</button>`).join('')}</span></li>`
+      return `<li data-pi="${i}">${itemLabel(it)}<span class="btns">${btns.map(([a, l]) => `<button data-a="${a}" data-i="${i}">${l}</button>`).join('')}</span></li>`
     }).join('') + '</ul>'
   } else if (tab === 'health') {
     const st = p.stats
@@ -1729,7 +1798,12 @@ function updatePlayer(dt, realDt) {
   if (over) spd *= Math.max(0.4, 1 - over * 0.07)
   spd *= speedMod(p.x, p.y, false)
   p.moving = moving
-  if (moving) p.phase = (p.phase || 0) + spd * dt * 3.4
+  p.running = running
+  if (moving) {
+    const before = Math.sin(p.phase || 0)
+    p.phase = (p.phase || 0) + spd * dt * 3.4
+    if (Math.sign(Math.sin(p.phase)) !== Math.sign(before) && dt > 0) sfx.step(surfaceAt(p.x, p.y), running ? 1.25 : p.sneak ? 0.3 : 0.7)
+  }
   if (moving) {
     const l = Math.hypot(mx, my)
     const before = Math.floor(p.y) * W.w + Math.floor(p.x)
@@ -1864,6 +1938,7 @@ function cause() {
 function die() {
   if (S.over) return
   S.over = true
+  S.overT = performance.now()
   S.sleeping = false
   S.player.action = null
   S.cause = cause()
@@ -2038,6 +2113,7 @@ function update(realDt) {
   }
   updateVision()
   updateParts(S.sleeping ? 0 : realDt)
+  updateAudio(realDt)
   ambientParticles(realDt)
   for (const r of S.rings) r.t += realDt
   S.rings = S.rings.filter(r => r.t < 0.8)
@@ -2077,6 +2153,11 @@ function dressZombie(z) {
   z.gore = randi(1, 999)
   z.phase = rand(0, 6)
   z.skin = randi(0, ZSKINS.length - 1)
+  const r = Math.random()
+  z.outfit = r < 0.28 ? 'tshirt' : r < 0.45 ? 'jacket' : r < 0.58 ? 'hoodie' : r < 0.66 ? 'flannel' : r < 0.72 ? 'tank' : r < 0.77 ? 'worker' : r < 0.82 ? 'suit' : r < 0.86 ? 'medic' : r < 0.9 ? 'police' : z.fem ? 'dress' : 'tshirt'
+  if (z.hair === 1 && Math.random() < 0.25) z.hair = 3
+  z.missingArm = Math.random() < 0.06 ? randi(1, 2) : 0
+  z.pose = randi(0, 2)
 }
 
 function wl(x, y) {
@@ -2580,25 +2661,34 @@ function charLook(z) {
     skin: ZSKINS[z.skin || 0],
     hair: z.hair ?? 1,
     hairColor: HAIRS[z.hc || 0],
-    gore: z.gore || 7
+    gore: z.gore || 7,
+    outfit: z.outfit || 'tshirt',
+    missingArm: z.missingArm || 0,
+    pose: z.pose || 0,
+    zombie: true
   }
 }
 
 function drawZombie(z) {
   const l = charLook(z)
+  const now = performance.now()
   drawChar(ctx, {
-    x: z.x * TS, y: z.y * TS, dir: z.dir, phase: z.phase || 0, moving: z.mv > 0, down: z.down > 0,
-    zombie: true, reach: z.st === 'chase', hit: z.hit, wobble: Math.sin((z.phase || 0) * 0.5) * 0.12, ...l
+    ...l,
+    x: z.x * TS, y: z.y * TS, dir: z.down > 0 ? z.fallDir ?? z.dir : z.dir, phase: z.phase || 0, moving: z.mv > 0, down: z.down > 0,
+    fall: z.down > 0 ? Math.min(1, (now - (z.fallT0 || 0)) / 320) : 1, struggle: z.down > 0 ? now / 1000 + z.gore : 0,
+    reach: z.st === 'chase', run: z.sprinter && z.st === 'chase', hit: z.hit, lean: z.stag > 0 ? (z.stag / 0.3) * (z.kbm || 1) : 0,
+    wobble: Math.sin((z.phase || 0) * 0.5) * 0.14 + (z.stag > 0 ? Math.sin(now / 40) * 0.08 : 0)
   })
 }
 
 function drawPlayerChar(p) {
   const { item } = currentWeapon()
-  const look = p.look || { shirt: '#3d5f7a', pants: '#2f3440', skin: '#d2a882', hair: 1, hairColor: '#3a2a1c' }
+  const look = p.look || { shirt: '#3d5f7a', pants: '#2f3440', skin: '#d2a882', hair: 1, hairColor: '#3a2a1c', outfit: 'jacket' }
   const bag = p.inv.some(i => ITEMS[i.id].kind === 'bag')
   drawChar(ctx, {
-    x: p.x * TS, y: p.y * TS, dir: p.dir, phase: p.phase || 0, moving: !!p.moving, down: S.over,
-    shirt: p.sneak ? shade(look.shirt, -0.25) : look.shirt, pants: look.pants, skin: look.skin, hair: look.hair, hairColor: look.hairColor,
+    x: p.x * TS, y: p.y * TS, dir: p.dir, phase: p.phase || 0, moving: !!p.moving, down: S.over, run: p.running, outfit: look.outfit || 'jacket', pose: 0, gore: 3,
+    scale: p.sneak ? 1.1 : 1.18, fall: S.over ? Math.min(1, (performance.now() - (S.overT || 0)) / 400) : 1,
+    shirt: look.shirt, pants: look.pants, skin: look.skin, hair: look.hair, hairColor: look.hairColor,
     weapon: item ? item.id : null, swing: p.swing > 0 ? p.swing / 0.18 : 0, bag, bagColor: '#4a4a32', hit: 0
   })
 }
@@ -2615,7 +2705,7 @@ function drawCorpse(c) {
   ctx.ellipse(c.x * TS, c.y * TS, r * 1.25, r, c.dir || 0, 0, Math.PI * 2)
   ctx.fill()
   const l = charLook(c)
-  drawChar(ctx, { x: c.x * TS, y: c.y * TS, dir: c.dir || 0, down: true, ...l })
+  drawChar(ctx, { ...l, x: c.x * TS, y: c.y * TS, dir: c.dir || 0, down: true, fall: c.born ? Math.min(1, (performance.now() - c.born) / 320) : 1 })
 }
 
 function drawSack(x, y) {
@@ -2880,8 +2970,11 @@ function render() {
     camX = p.x * TS
     camY = p.y * TS
   }
-  const sx = Math.round((cw / 2 - camX * zoom) * dpr) / dpr
-  const sy = Math.round((ch / 2 - camY * zoom) * dpr) / dpr
+  const sh = S.shake > 0.15 ? S.shake : 0
+  const shx = sh ? Math.cos(S.shakeDir || 0) * sh * 0.6 + (Math.random() - 0.5) * sh : 0
+  const shy = sh ? Math.sin(S.shakeDir || 0) * sh * 0.6 + (Math.random() - 0.5) * sh : 0
+  const sx = Math.round((cw / 2 - camX * zoom + shx) * dpr) / dpr
+  const sy = Math.round((ch / 2 - camY * zoom + shy) * dpr) / dpr
   ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, dpr * sx, dpr * sy)
   ctx.imageSmoothingEnabled = true
   const x0 = Math.max(0, Math.floor((camX - cw / 2 / zoom) / TS) - 1)
@@ -2997,6 +3090,7 @@ function render() {
   drawFog(x0, y0, x1, y1)
   drawRoofs(x0, y0, x1, y1)
   drawTargetMark()
+  drawMarkers(now)
   for (const r of S.rings) {
     ctx.strokeStyle = `rgba(230,200,140,${(1 - r.t / 0.8) * 0.3})`
     ctx.lineWidth = 1.5
@@ -3242,6 +3336,283 @@ function typing() {
   return a && (a.tagName === 'INPUT' || a.tagName === 'SELECT')
 }
 
+function syncHot() {
+  const p = S.player
+  if (!p.hot) p.hot = [null, null, null, null, null]
+  for (let i = 0; i < 5; i++) if (p.hot[i] && !p.inv.includes(p.hot[i])) {
+    const same = p.inv.find(x => x.id === p.hot[i].id && !p.hot.includes(x))
+    p.hot[i] = same || null
+  }
+  for (const it of p.inv) {
+    const d = ITEMS[it.id]
+    if ((d.kind === 'weapon' || it.id === 'flashlight') && !p.hot.includes(it)) {
+      const free = p.hot.indexOf(null)
+      if (free >= 0) p.hot[free] = it
+    }
+  }
+}
+
+function useHot(i) {
+  const p = S.player
+  syncHot()
+  const it = p.hot[i]
+  if (!it) return log(`Atalho ${i + 1} vazio. Clique com o botão direito em um item para atribuir.`)
+  sfx.ui()
+  quickUse(it)
+}
+
+function quickUse(it) {
+  const p = S.player
+  const d = ITEMS[it.id]
+  if (d.kind === 'weapon') {
+    p.equip = p.equip === it ? null : it
+    return
+  }
+  if (it.id === 'flashlight') return toggleLight()
+  if (['food', 'drink', 'book', 'fun'].includes(d.kind) || ['painkillers', 'calm', 'antibiotics', 'vitamins', 'cigarettes', 'battery'].includes(it.id)) return consume(it)
+  if (it.id === 'bandage' || it.id === 'rag') {
+    const w = p.wounds.find(w => !w.bandage && w.bleed) || p.wounds.find(w => !w.bandage)
+    if (!w) return log('Nenhum ferimento precisando de curativo.')
+    return startAction('Fazendo curativo', Math.max(1, 3 - lvl('firstAid') * 0.2), () => {
+      if (!invCount(it.id)) return
+      removeQty(p.inv, it.id, 1)
+      w.bandage = it.id === 'bandage' ? 'clean' : 'dirty'
+      w.bleed = false
+      addXP('firstAid', 4)
+    })
+  }
+  if (it.id === 'disinfectant') {
+    const w = p.wounds.find(w => !w.dis)
+    if (!w) return log('Nenhum ferimento para desinfetar.')
+    return startAction('Desinfetando', 2, () => {
+      if (!useDisinfectant()) return
+      w.dis = true
+      w.inf = false
+      addXP('firstAid', 3)
+    })
+  }
+  log(`${d.name} não tem uso rápido.`)
+}
+
+function renderHotbar() {
+  const p = S.player
+  syncHot()
+  const el = $('hotbar')
+  el.innerHTML = p.hot.map((it, i) => {
+    if (!it) return `<div class="slot empty"><i>${i + 1}</i></div>`
+    const d = ITEMS[it.id]
+    let bar = ''
+    if (it.dur !== undefined && d.dur) bar = `<b style="width:${(it.dur / d.dur) * 100}%"></b>`
+    else if (it.charge !== undefined) bar = `<b style="width:${it.charge}%"></b>`
+    const q = d.mag ? `${it.ammo}/${d.mag}` : it.qty > 1 ? it.qty : ''
+    const on = p.equip === it || (it.id === 'flashlight' && p.light)
+    return `<div class="slot ${on ? 'on' : ''}" data-h="${i}" title="${d.name}"><i>${i + 1}</i><img src="${iconURL(it.id)}" alt=""><u>${q}</u>${bar ? `<s>${bar}</s>` : ''}</div>`
+  }).join('')
+}
+
+function hideCtx() {
+  $('ctx').classList.add('hidden')
+}
+
+function showCtx(x, y, title, entries) {
+  const el = $('ctx')
+  el.innerHTML = (title ? `<div class="ct">${title}</div>` : '') + entries.map((e, i) => e.hot ? `<div class="hotpick"><span>Atalho</span>${[0, 1, 2, 3, 4].map(n => `<button data-hk="${n}" class="${e.cur === n ? 'on' : ''}">${n + 1}</button>`).join('')}</div>` : `<button data-e="${i}" ${e.off ? 'disabled' : ''}>${e.key ? `<kbd>${e.key}</kbd>` : ''}${e.label}</button>`).join('')
+  el.classList.remove('hidden')
+  const r = el.getBoundingClientRect()
+  el.style.left = Math.min(x, window.innerWidth - r.width - 8) + 'px'
+  el.style.top = Math.min(y, window.innerHeight - r.height - 8) + 'px'
+  el.onclick = ev => {
+    const b = ev.target.closest('button')
+    if (!b) return
+    if (b.dataset.hk !== undefined) {
+      const h = entries.find(e => e.hot)
+      h.fn(+b.dataset.hk)
+    } else entries[+b.dataset.e].fn()
+    hideCtx()
+    renderPanel()
+    if (S.openCont) renderContainer()
+    renderHotbar()
+  }
+}
+
+function itemCtx(it, x, y, list) {
+  const p = S.player
+  const d = ITEMS[it.id]
+  const E = []
+  if (d.kind === 'food') E.push({ label: 'Comer', fn: () => consume(it) })
+  if (d.kind === 'drink') E.push({ label: 'Beber', fn: () => consume(it) })
+  if (['painkillers', 'calm', 'antibiotics', 'vitamins'].includes(it.id)) E.push({ label: 'Tomar', fn: () => consume(it) })
+  if (d.kind === 'book' || d.kind === 'fun') E.push({ label: 'Ler', fn: () => consume(it) })
+  if (it.id === 'cigarettes') E.push({ label: 'Fumar', fn: () => consume(it) })
+  if (d.kind === 'weapon') E.push({ label: p.equip === it ? 'Guardar arma' : 'Equipar', fn: () => { p.equip = p.equip === it ? null : it } })
+  if (list === p.inv && (it.id === 'bandage' || it.id === 'rag')) E.push({ label: 'Fazer curativo', fn: () => quickUse(it) })
+  if (list === p.inv && it.id === 'disinfectant') E.push({ label: 'Desinfetar ferimento', fn: () => quickUse(it) })
+  if (list === p.inv && it.id === 'battery' && invFind('flashlight')) E.push({ label: 'Trocar pilha da lanterna', fn: () => consume(it) })
+  if (it.id === 'flashlight') E.push({ label: p.light ? 'Desligar lanterna' : 'Ligar lanterna', fn: toggleLight })
+  if (list === p.inv) {
+    E.push({ hot: true, cur: p.hot ? p.hot.indexOf(it) : -1, fn: n => { syncHot(); const j = p.hot.indexOf(it); if (j >= 0) p.hot[j] = null; p.hot[n] = it } })
+    E.push({ label: 'Largar no chão', fn: () => { removeItem(p.inv, it); dropGround(Math.floor(p.x), Math.floor(p.y), it) } })
+    if (S.openCont) E.push({ label: 'Guardar no recipiente', fn: () => transfer(p.inv, contItems(S.openCont), it, it.qty) })
+  } else {
+    E.push({ label: 'Pegar', fn: () => takeFromContainer(S.openCont, it, it.qty) })
+    if (ITEMS[it.id].stack && it.qty > 1) E.push({ label: 'Pegar 1', fn: () => takeFromContainer(S.openCont, it, 1) })
+  }
+  showCtx(x, y, d.name, E)
+}
+
+function worldCtx(x, y) {
+  const tg = target
+  const E = []
+  if (tg) {
+    E.push({ key: 'E', label: tg.label, fn: interact })
+    if (tg.kind === 'door' || tg.kind === 'window') {
+      E.push({ key: 'B', label: 'Barricar (martelo, tábua e 2 pregos)', fn: () => barricade(false), off: !invFind('hammer') })
+      const o = tg.kind === 'door' ? W.doors[tg.k] : W.windows[tg.k]
+      if (o.bars.length) E.push({ label: 'Remover tábua', fn: () => barricade(true) })
+    }
+    if (tg.kind === 'dig') E.push({ key: 'G', label: 'Cavar canteiro', fn: dig })
+  }
+  E.push({ key: 'Tab', label: 'Inventário', fn: () => togglePanel('inv') })
+  E.push({ key: 'J', label: 'Saúde', fn: () => togglePanel('health') })
+  E.push({ key: 'O', label: 'Criação', fn: () => togglePanel('craft') })
+  showCtx(x, y, tg ? null : 'Ações', E)
+}
+
+const MINI_COL = {}
+let miniT = 0
+function renderMinimap(dt) {
+  miniT -= dt
+  if (miniT > 0) return
+  miniT = 0.2
+  const c = $('minimap')
+  const hidden = !$('panel').classList.contains('hidden') || !$('container').classList.contains('hidden')
+  c.style.opacity = hidden ? 0 : 1
+  if (hidden) return
+  const g = c.getContext('2d')
+  const N = 46
+  const s = c.width / N
+  const p = S.player
+  const ox = Math.floor(p.x) - N / 2
+  const oy = Math.floor(p.y) - N / 2
+  if (!MINI_COL.ok) {
+    Object.assign(MINI_COL, { [T.GRASS]: '#3a4a2c', [T.TREE]: '#24331e', [T.ROAD]: '#2a2b2e', [T.SIDEWALK]: '#5c5952', [T.PARKING]: '#333438', [T.WATER]: '#2a4a60', [T.DIRT]: '#5a4430', [T.FLOOR]: '#7a6650', [T.FURN]: '#6a5a46', [T.WALL]: '#c8bca8', [T.WINDOW]: '#8ab0c8', [T.DOOR]: '#a07a4a', [T.WOODWALL]: '#a07c4e', [T.CAR]: '#8a7a6a', ok: true })
+  }
+  g.fillStyle = '#07090c'
+  g.fillRect(0, 0, c.width, c.height)
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const tx = ox + x
+    const ty = oy + y
+    if (!inb(tx, ty)) continue
+    const k = idx(tx, ty)
+    if (!S.seen[k]) continue
+    g.fillStyle = MINI_COL[W.tiles[k]] || '#444'
+    g.fillRect(x * s, y * s, s + 0.5, s + 0.5)
+    if (!S.vis[k]) {
+      g.fillStyle = 'rgba(7,9,12,0.45)'
+      g.fillRect(x * s, y * s, s + 0.5, s + 0.5)
+    }
+  }
+  const hb = W.buildings[W.home]
+  g.strokeStyle = '#f0d070'
+  g.lineWidth = 1.5
+  g.strokeRect((hb.x - ox) * s, (hb.y - oy) * s, hb.w * s, hb.h * s)
+  g.fillStyle = '#e0483a'
+  for (const z of S.zombies) {
+    const zx = (z.x - ox) * s
+    const zy = (z.y - oy) * s
+    if (zx < 0 || zy < 0 || zx > c.width || zy > c.height) continue
+    if (!S.vis[idx(Math.floor(z.x), Math.floor(z.y))]) continue
+    g.beginPath()
+    g.arc(zx, zy, 2.2, 0, Math.PI * 2)
+    g.fill()
+  }
+  const px = (p.x - ox) * s
+  const py = (p.y - oy) * s
+  g.save()
+  g.translate(px, py)
+  g.rotate(p.dir)
+  g.fillStyle = '#f0d070'
+  g.beginPath()
+  g.moveTo(6, 0)
+  g.lineTo(-4, -4)
+  g.lineTo(-2, 0)
+  g.lineTo(-4, 4)
+  g.closePath()
+  g.fill()
+  g.restore()
+}
+
+function drawMarkers(now) {
+  const p = S.player
+  const inside = playerBuilding()
+  const pulse = 0.6 + Math.sin(now * 4) * 0.4
+  const R = 8
+  const mark = (x, y, fresh) => {
+    if (fresh) {
+      ctx.fillStyle = `rgba(255,214,110,${0.55 + pulse * 0.45})`
+      ctx.beginPath()
+      ctx.moveTo(x, y - 4)
+      ctx.lineTo(x + 3, y)
+      ctx.lineTo(x, y + 4)
+      ctx.lineTo(x - 3, y)
+      ctx.closePath()
+      ctx.fill()
+      ctx.strokeStyle = 'rgba(40,30,10,0.7)'
+      ctx.lineWidth = 0.8
+      ctx.stroke()
+    } else {
+      ctx.fillStyle = 'rgba(240,236,224,0.75)'
+      ctx.beginPath()
+      ctx.arc(x, y, 1.8, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }
+  const x0 = Math.floor(p.x - R)
+  const y0 = Math.floor(p.y - R)
+  for (let y = y0; y <= y0 + R * 2; y++) for (let x = x0; x <= x0 + R * 2; x++) {
+    if (!inb(x, y)) continue
+    const k = idx(x, y)
+    if (!S.vis[k] || W.tiles[k] !== T.FURN) continue
+    const b = W.bld[k]
+    if (b >= 0 && b !== inside) continue
+    const f = W.furn[k]
+    const def = FURN[f.kind]
+    if (!def.loot && f.kind !== 'crate') continue
+    if (f.items && !f.items.length) continue
+    mark(x * TS + 16, y * TS - FURN_LIFT + 2 - Math.sin(now * 3 + x) * 1.5, f.items === null)
+  }
+  for (const c of W.cars) {
+    const cx = c.horiz ? c.x + 1 : c.x + 0.5
+    const cy = c.horiz ? c.y + 0.5 : c.y + 1
+    if (Math.abs(cx - p.x) > R || Math.abs(cy - p.y) > R || !S.vis[idx(c.x, c.y)]) continue
+    if (c.items && !c.items.length) continue
+    mark(cx * TS, cy * TS - 12, c.items === null)
+  }
+  for (const c of S.corpses) {
+    if (!c.items.length || Math.abs(c.x - p.x) > R || Math.abs(c.y - p.y) > R) continue
+    if (!S.vis[idx(Math.floor(c.x), Math.floor(c.y))]) continue
+    mark(c.x * TS, c.y * TS - 14, false)
+  }
+  if (target && !S.sleeping && !p.action) {
+    const tx = target.x * TS
+    const ty = target.y * TS - (target.kind === 'corpse' ? 24 : 34)
+    ctx.fillStyle = 'rgba(14,16,20,0.85)'
+    ctx.beginPath()
+    ctx.roundRect(tx - 7, ty - 7, 14, 14, 3)
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(216,178,90,0.9)'
+    ctx.lineWidth = 1
+    ctx.stroke()
+    ctx.fillStyle = '#f0e6c8'
+    ctx.font = 'bold 9px "IBM Plex Mono", monospace'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('E', tx, ty + 0.5)
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'alphabetic'
+  }
+}
+
 function renderHud(force) {
   if (!S) return
   const p = S.player
@@ -3262,6 +3633,7 @@ function renderHud(force) {
   $('log').innerHTML = S.log.filter(l => now - l.t < 14000).map(l => `<div class="${l.kind}" style="opacity:${clamp(1 - (now - l.t - 10000) / 4000, 0, 1)}">${l.text}</div>`).join('')
   $('hint').innerHTML = target ? `<kbd>E</kbd> ${target.label}${target.kind === 'door' || target.kind === 'window' ? ' · <kbd>B</kbd> barricar' : ''}` : ''
   $('hint').style.display = target ? '' : 'none'
+  renderHotbar()
   if (force) {
     renderPanel()
   }
@@ -3328,7 +3700,7 @@ function serialize() {
       settings: S.settings, time: S.time, zombies: S.zombies.map(z => ({ ...z, hit: 0 })), corpses: S.corpses.slice(-150), ground: S.ground,
       blood: S.blood.filter(b => b.r >= 0.1).slice(-250), kills: S.kills, powerOff: S.powerOff, waterOff: S.waterOff, powerOffAt: S.powerOffAt, waterOffAt: S.waterOffAt,
       heli: S.heli, rain: S.rain, alarms: S.alarms,
-      player: { ...p, action: null, equipIdx: p.inv.indexOf(p.equip), equip: null }
+      player: { ...p, action: null, equipIdx: p.inv.indexOf(p.equip), equip: null, hot: null, hotIdx: (p.hot || []).map(h => p.inv.indexOf(h)) }
     }
   }
   return JSON.stringify(data)
@@ -3375,6 +3747,9 @@ function load() {
   }
   const p = S.player
   p.equip = p.equipIdx >= 0 ? p.inv[p.equipIdx] : null
+  p.hot = (p.hotIdx || []).map(i => (i >= 0 ? p.inv[i] || null : null))
+  while (p.hot.length < 5) p.hot.push(null)
+  delete p.hotIdx
   delete p.equipIdx
   log(`Bem-vindo de volta. Dia ${dayNum()}, ${clockStr()}.`, 'warn')
   return true
@@ -3427,7 +3802,7 @@ function showCreator() {
   const SHIRT_OPTS = ['#3d5f7a', '#7a3a32', '#4a6a3a', '#8a7a4a', '#5a4a6a', '#2e2e32', '#b8b2a4']
   const HAIR_OPTS = ['#3a2a1c', '#1a1a1a', '#6e4a2a', '#b08a50', '#8a3a1a', '#9a9a92']
   const SKIN_OPTS = ['#f0c8a0', '#d2a882', '#b07a52', '#8a5a3a', '#5e3c26']
-  const sel = { prof: 'unemployed', traits: [], look: { shirt: SHIRT_OPTS[0], pants: '#2f3440', skin: SKIN_OPTS[1], hair: 1, hairColor: HAIR_OPTS[0] } }
+  const sel = { prof: 'unemployed', traits: [], look: { shirt: SHIRT_OPTS[0], pants: '#2f3440', skin: SKIN_OPTS[1], hair: 1, hairColor: HAIR_OPTS[0], outfit: 'jacket' } }
   const draw = () => {
     const prof = PROFESSIONS.find(p => p.id === sel.prof)
     const pts = prof.points - sel.traits.reduce((a, t) => a + TRAITS.find(x => x.id === t).cost, 0)
@@ -3438,11 +3813,13 @@ function showCreator() {
           <section>
             <label>Nome<input id="cname" maxlength="24" value="${sel.name || ''}" placeholder="Sobrevivente"></label>
             <h3>Aparência</h3>
+            <canvas id="preview" width="240" height="160"></canvas>
             <div class="looks">
-              <div><span>Roupa</span>${SHIRT_OPTS.map(c => `<button class="sw ${sel.look.shirt === c ? 'on' : ''}" data-shirt="${c}" style="background:${c}"></button>`).join('')}</div>
+              <div><span>Estilo</span>${[['Jaqueta', 'jacket'], ['Moletom', 'hoodie'], ['Camiseta', 'tshirt'], ['Flanela', 'flannel'], ['Regata', 'tank']].map(([n, v]) => `<button class="${sel.look.outfit === v ? 'on' : ''}" data-of="${v}">${n}</button>`).join('')}</div>
+              <div><span>Cor</span>${SHIRT_OPTS.map(c => `<button class="sw ${sel.look.shirt === c ? 'on' : ''}" data-shirt="${c}" style="background:${c}"></button>`).join('')}</div>
               <div><span>Pele</span>${SKIN_OPTS.map(c => `<button class="sw ${sel.look.skin === c ? 'on' : ''}" data-skin="${c}" style="background:${c}"></button>`).join('')}</div>
               <div><span>Cabelo</span>${HAIR_OPTS.map(c => `<button class="sw ${sel.look.hairColor === c ? 'on' : ''}" data-hc="${c}" style="background:${c}"></button>`).join('')}</div>
-              <div><span>Corte</span>${[['Raspado', 0], ['Curto', 1], ['Longo', 2]].map(([n, v]) => `<button class="${sel.look.hair === v ? 'on' : ''}" data-hs="${v}">${n}</button>`).join('')}</div>
+              <div><span>Corte</span>${[['Raspado', 0], ['Curto', 1], ['Bagunçado', 3], ['Longo', 2]].map(([n, v]) => `<button class="${sel.look.hair === v ? 'on' : ''}" data-hs="${v}">${n}</button>`).join('')}</div>
             </div>
             <h3>Profissão</h3>
             <div class="profs">${PROFESSIONS.map(p => `<button data-prof="${p.id}" class="${p.id === sel.prof ? 'on' : ''}"><b>${p.name}</b><span>${p.desc}</span><em>${p.points >= 0 ? '+' : ''}${p.points} pts</em></button>`).join('')}</div>
@@ -3466,6 +3843,25 @@ function showCreator() {
           <button id="go" class="primary" ${pts < 0 ? 'disabled' : ''}>Começar</button>
         </div>
       </div>`
+    const pv = $('preview')
+    const pg = pv.getContext('2d')
+    let pvT = 0
+    const drawPv = () => {
+      if (!document.body.contains(pv)) return
+      pvT += 0.12
+      pg.setTransform(1, 0, 0, 1, 0, 0)
+      pg.clearRect(0, 0, pv.width, pv.height)
+      pg.setTransform(2.6, 0, 0, 2.6, 70, 80)
+      drawChar(pg, { x: 0, y: 0, dir: Math.PI / 2, phase: pvT, moving: true, outfit: sel.look.outfit, shirt: sel.look.shirt, pants: sel.look.pants, skin: sel.look.skin, hair: sel.look.hair, hairColor: sel.look.hairColor, gore: 3, weapon: null })
+      pg.setTransform(2.6, 0, 0, 2.6, 170, 80)
+      drawChar(pg, { x: 0, y: 0, dir: Math.PI / 2 + 0.3, phase: pvT * 0.6, moving: true, reach: true, zombie: true, outfit: 'flannel', shirt: '#5a4b4b', pants: '#3a3a30', skin: '#8a9a78', hair: 3, hairColor: '#4a3220', gore: 77 })
+      requestAnimationFrame(drawPv)
+    }
+    if (!pv.dataset.on) {
+      pv.dataset.on = '1'
+      requestAnimationFrame(drawPv)
+    }
+    m.querySelectorAll('[data-of]').forEach(b => (b.onclick = () => { sel.name = $('cname').value; sel.look.outfit = b.dataset.of; draw() }))
     m.querySelectorAll('[data-shirt]').forEach(b => (b.onclick = () => { sel.name = $('cname').value; sel.look.shirt = b.dataset.shirt; draw() }))
     m.querySelectorAll('[data-skin]').forEach(b => (b.onclick = () => { sel.name = $('cname').value; sel.look.skin = b.dataset.skin; draw() }))
     m.querySelectorAll('[data-hc]').forEach(b => (b.onclick = () => { sel.name = $('cname').value; sel.look.hairColor = b.dataset.hc; draw() }))
@@ -3532,6 +3928,7 @@ function toggleHelp(show) {
           <li><kbd>E</kbd> interagir (portas, janelas, móveis, camas, pias)</li>
           <li><kbd>B</kbd> barricar · <kbd>Shift+B</kbd> remover tábua</li>
           <li><kbd>R</kbd> recarregar · <kbd>Q</kbd> trocar arma</li>
+          <li><kbd>1</kbd>–<kbd>5</kbd> barra rápida · <kbd>Botão direito</kbd> menu de ações</li>
           <li><kbd>F</kbd> lanterna · <kbd>G</kbd> cavar canteiro</li>
           <li><kbd>Tab</kbd>/<kbd>I</kbd> inventário · <kbd>J</kbd> saúde · <kbd>K</kbd> habilidades · <kbd>O</kbd> criação</li>
           <li><kbd>M</kbd> mapa · <kbd>Roda</kbd> zoom · <kbd>Esc</kbd> pausa</li>
@@ -3559,11 +3956,19 @@ function togglePause() {
   const el = $('pause')
   if (!el.classList.contains('hidden')) return el.classList.add('hidden')
   el.classList.remove('hidden')
-  el.innerHTML = `<div class="card small-card"><h2>Pausado</h2><div class="mbtns">
+  const v = getVolumes()
+  el.innerHTML = `<div class="card small-card"><h2>Pausado</h2>
+    <div class="vols">
+      <label>Volume geral<input type="range" id="vmaster" min="0" max="1" step="0.05" value="${v.master}"></label>
+      <label>Música<input type="range" id="vmusic" min="0" max="1" step="0.05" value="${v.music}"></label>
+      <label>Efeitos<input type="range" id="vsfx" min="0" max="1" step="0.05" value="${v.sfx}"></label>
+    </div>
+    <div class="mbtns">
     <button id="resume" class="primary">Continuar</button>
     <button id="psave">Salvar</button>
     <button id="phelp">Como jogar</button>
     <button id="pquit">Salvar e sair</button></div></div>`
+  for (const [id, key] of [['vmaster', 'master'], ['vmusic', 'music'], ['vsfx', 'sfx']]) $(id).oninput = e => setVolumes({ [key]: +e.target.value })
   $('resume').onclick = () => el.classList.add('hidden')
   $('psave').onclick = () => { save(); log('Jogo salvo.', 'good'); el.classList.add('hidden') }
   $('phelp').onclick = () => toggleHelp(true)
@@ -3589,6 +3994,7 @@ window.addEventListener('keydown', e => {
   if (!S || S.over) return
   if (e.code === 'Tab') e.preventDefault()
   if (e.code === 'Escape') {
+    if (!$('ctx').classList.contains('hidden')) return hideCtx()
     if (S.sleeping) return wake()
     if (!$('mapview').classList.contains('hidden')) return $('mapview').classList.add('hidden')
     if (!$('help').classList.contains('hidden')) return toggleHelp(false)
@@ -3605,6 +4011,11 @@ window.addEventListener('keydown', e => {
     case 'KeyF': toggleLight(); break
     case 'KeyG': dig(); break
     case 'KeyQ': cycleWeapon(); break
+    case 'Digit1':
+    case 'Digit2':
+    case 'Digit3':
+    case 'Digit4':
+    case 'Digit5': useHot(+e.code.slice(5) - 1); break
     case 'Space': e.preventDefault(); playerAttack(true); break
     case 'Tab':
     case 'KeyI': togglePanel('inv'); break
@@ -3628,13 +4039,48 @@ canvas.addEventListener('mousemove', e => { mouse.sx = e.clientX; mouse.sy = e.c
 canvas.addEventListener('mousedown', e => {
   unlockAudio()
   if (!S || S.over || paused()) return
+  if (!$('ctx').classList.contains('hidden')) return
   if (e.button === 0) {
     mouse.down = true
     playerAttack(false)
   }
 })
 window.addEventListener('mouseup', () => { mouse.down = false })
-canvas.addEventListener('contextmenu', e => e.preventDefault())
+canvas.addEventListener('contextmenu', e => {
+  e.preventDefault()
+  if (!S || S.over || paused()) return
+  mouse.sx = e.clientX
+  mouse.sy = e.clientY
+  worldCtx(e.clientX, e.clientY)
+})
+document.addEventListener('mousedown', e => {
+  if (!e.target.closest('#ctx')) hideCtx()
+})
+for (const id of ['panel', 'container']) {
+  document.getElementById(id).addEventListener('contextmenu', e => {
+    const li = e.target.closest('li')
+    if (!li || !S) return
+    e.preventDefault()
+    if (li.dataset.pi !== undefined) {
+      const it = S.player.inv[+li.dataset.pi]
+      if (it) itemCtx(it, e.clientX, e.clientY, S.player.inv)
+    } else if (li.dataset.ci !== undefined && S.openCont) {
+      const it = contItems(S.openCont)[+li.dataset.ci]
+      if (it) itemCtx(it, e.clientX, e.clientY, null)
+    }
+  })
+}
+document.getElementById('hotbar').addEventListener('mousedown', e => {
+  const sl = e.target.closest('[data-h]')
+  if (!sl || !S) return
+  e.preventDefault()
+  e.stopPropagation()
+  if (e.button === 2) {
+    const it = S.player.hot[+sl.dataset.h]
+    if (it) itemCtx(it, e.clientX, e.clientY - 120, S.player.inv)
+  } else useHot(+sl.dataset.h)
+})
+document.getElementById('hotbar').addEventListener('contextmenu', e => e.preventDefault())
 canvas.addEventListener('wheel', e => {
   e.preventDefault()
   zoom = clamp(zoom * (e.deltaY > 0 ? 0.9 : 1.1), 0.7, 2.8)
@@ -3647,7 +4093,9 @@ function frame(t) {
   lastFrame = t
   if (S && !paused()) {
     if (mouse.down && !S.player.action && currentWeapon().def.cat !== 'gun') playerAttack(false)
-    update(realDt)
+    if (S.hitstop > 0) S.hitstop -= realDt
+    else update(realDt)
+    S.shake = (S.shake || 0) * Math.exp(-realDt * 13)
   }
   render()
   hudTimer -= realDt
@@ -3655,6 +4103,7 @@ function frame(t) {
     hudTimer = 0.15
     renderHud(false)
   }
+  if (S && !S.over) renderMinimap(realDt)
   requestAnimationFrame(frame)
 }
 
