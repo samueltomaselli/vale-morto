@@ -1,9 +1,9 @@
-import { ITEMS, SKILLS, PROFESSIONS, TRAITS, RECIPES, LOOT, STACK_AMOUNTS, FURN } from './data.js'
-import { T, createWorld, rollLoot } from './world.js'
-import { sfx, unlockAudio, setAmbience, setVolumes, getVolumes } from './audio.js'
-import { Ground, TS, WALL_H, FURN_LIFT, hash, shade, makeCanvas, furnSprite, treeSprite, carSprite, roofSprite, splatSprite, wallFace } from './gfx.js'
-import { drawChar, HAIRS, OUTFITS } from './chars.js'
-import { iconURL } from './icons.js'
+import { ITEMS, SKILLS, PROFESSIONS, TRAITS, RECIPES, LOOT, STACK_AMOUNTS, FURN } from './data.js?v=202610070923'
+import { T, createWorld, rollLoot } from './world.js?v=202610070923'
+import { sfx, unlockAudio, setAmbience, setVolumes, getVolumes } from './audio.js?v=202610070923'
+import { Ground, TS, WALL_H, FURN_LIFT, hash, shade, makeCanvas, furnSprite, treeSprite, carSprite, roofSprite, splatSprite, wallFace } from './gfx.js?v=202610070923'
+import { drawChar, HAIRS, OUTFITS } from './chars.js?v=202610070923'
+import { iconURL } from './icons.js?v=202610070923'
 
 const SAVE_KEY = 'vale-morto-save-v2'
 const START_TIME = 9 * 60

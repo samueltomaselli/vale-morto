@@ -1,4 +1,4 @@
-import { T, CAR_COLORS } from './world.js'
+import { T, CAR_COLORS } from './world.js?v=202610070923'
 
 export const TS = 32
 export const WALL_H = 26
