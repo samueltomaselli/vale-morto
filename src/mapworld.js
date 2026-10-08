@@ -1,4 +1,4 @@
-import { T, mulberry32 } from './world.js'
+import { T, mulberry32 } from './world.js?v=202610071200'
 
 const W4 = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 
@@ -326,23 +326,34 @@ export function createWorldFromMap(data, seed) {
       const t = get(x + dx, y + dy)
       return t === T.WALL || t === T.WINDOW
     })
-    const reach0 = starts.length ? floodFrom(starts) : null
-    const safePlace = (x, y, kind) => {
-      if (get(x, y) !== T.FLOOR || nearOpen(x, y) || doorIn.has(idx(x, y))) return false
-      placeFurn(x, y, kind)
-      if (reach0) {
-        const r = floodFrom(starts)
-        let ok = true
-        for (const k of list) if (world.tiles[k] === T.FLOOR && reach0.has(k) && !r.has(k)) {
-          ok = false
-          break
-        }
-        if (!ok) {
-          set(x, y, T.FLOOR)
-          delete world.furn[idx(x, y)]
-          return false
+    const passable = (x, y) => {
+      const t = get(x, y)
+      return t === T.FLOOR || t === T.DOOR
+    }
+    const localOk = (x, y) => {
+      const nb = W4.map(([dx, dy]) => [x + dx, y + dy]).filter(([a, c]) => passable(a, c))
+      if (nb.length <= 1) return nb.length === 1
+      const seen = new Set([`${nb[0][0]},${nb[0][1]}`])
+      const q = [nb[0]]
+      while (q.length) {
+        const [cx, cy] = q.pop()
+        for (const [dx, dy] of W4) {
+          const nx = cx + dx
+          const ny = cy + dy
+          if (Math.abs(nx - x) > 2 || Math.abs(ny - y) > 2) continue
+          if (nx === x && ny === y) continue
+          const key = `${nx},${ny}`
+          if (seen.has(key) || !passable(nx, ny)) continue
+          seen.add(key)
+          q.push([nx, ny])
         }
       }
+      return nb.every(([a, c]) => seen.has(`${a},${c}`))
+    }
+    const safePlace = (x, y, kind) => {
+      if (get(x, y) !== T.FLOOR || nearOpen(x, y) || doorIn.has(idx(x, y))) return false
+      if (!localOk(x, y)) return false
+      placeFurn(x, y, kind)
       return true
     }
     const wallKit = (r, kinds) => {

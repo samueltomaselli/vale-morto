@@ -30,3 +30,9 @@ Jogo de sobrevivência zumbi em visão de cima, feito para rodar no navegador. I
 ```
 python3 -m http.server 8000
 ```
+
+## Mapa de Jaraguá do Sul
+
+O mapa "Jaraguá do Sul — Centro" é gerado a partir de dados do OpenStreetMap (© colaboradores do OpenStreetMap, licença ODbL). Os prédios aparecem com nomes genéricos (Colégio, Shopping, Igreja); as ruas mantêm os nomes reais.
+
+Para regenerar: `node tools/osm2map.mjs data/jaragua-centro.osm maps/jaragua.json --max=1000`

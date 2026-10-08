@@ -305,7 +305,7 @@ for (const a of areas) {
     count++
   })
   if (!count) continue
-  buildings.push({ t: typeOf(a.tags), n: a.tags.name || '', lv: +a.tags['building:levels'] || 0 })
+  buildings.push({ t: typeOf(a.tags), n: a.tags.name || '', lv: +a.tags['building:levels'] || 0, a: count })
 }
 
 const prio = ['school', 'church', 'mall', 'police', 'clinic', 'pharmacy', 'market', 'hardware', 'bakery', 'fuel', 'restaurant', 'office', 'store']
@@ -330,6 +330,11 @@ for (const p of poiNodes) {
   if (!p.tags.amenity && !p.tags.shop && !p.tags.office) continue
   const t = typeOf({ ...p.tags, building: 'yes' })
   const cur = buildings[id - 1]
+  const small = ['pharmacy', 'bakery', 'restaurant', 'store', 'fuel', 'market', 'hardware', 'office', 'clinic']
+  if (cur.a > 1100 && small.includes(t) && cur.t !== 'school' && cur.t !== 'church') {
+    cur.t = cur.t === 'industrial' ? 'industrial' : 'mall'
+    continue
+  }
   const better = prio.indexOf(t) >= 0 && (prio.indexOf(cur.t) < 0 || prio.indexOf(t) < prio.indexOf(cur.t))
   if (better) cur.t = t
   if (!cur.n && p.tags.name) cur.n = p.tags.name

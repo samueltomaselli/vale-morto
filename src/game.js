@@ -1,10 +1,10 @@
-import { ITEMS, SKILLS, PROFESSIONS, TRAITS, RECIPES, LOOT, STACK_AMOUNTS, FURN } from './data.js?v=202610070923'
-import { createWorldFromMap, LABELS } from './mapworld.js?v=202610070923'
-import { T, createWorld, rollLoot } from './world.js?v=202610070923'
-import { sfx, unlockAudio, setAmbience, setVolumes, getVolumes } from './audio.js?v=202610070923'
-import { Ground, TS, WALL_H, FURN_LIFT, hash, shade, makeCanvas, furnSprite, treeSprite, carSprite, splatSprite, wallFace, roofTile, acUnit, ROOF_COLORS } from './gfx.js?v=202610070923'
-import { drawChar, HAIRS, OUTFITS } from './chars.js?v=202610070923'
-import { iconURL } from './icons.js?v=202610070923'
+import { ITEMS, SKILLS, PROFESSIONS, TRAITS, RECIPES, LOOT, STACK_AMOUNTS, FURN } from './data.js?v=202610071200'
+import { createWorldFromMap, LABELS } from './mapworld.js?v=202610071200'
+import { T, createWorld, rollLoot } from './world.js?v=202610071200'
+import { sfx, unlockAudio, setAmbience, setVolumes, getVolumes } from './audio.js?v=202610071200'
+import { Ground, TS, WALL_H, FURN_LIFT, hash, shade, makeCanvas, furnSprite, treeSprite, carSprite, splatSprite, wallFace, roofTile, acUnit, ROOF_COLORS } from './gfx.js?v=202610071200'
+import { drawChar, HAIRS, OUTFITS } from './chars.js?v=202610071200'
+import { iconURL } from './icons.js?v=202610071200'
 
 const SAVE_KEY = 'vale-morto-save-v3'
 let MAPDATA = null
@@ -14,7 +14,7 @@ function loadMapData() {
   if (!mapPromise) mapPromise = fetch('maps/jaragua.json?v=' + MAP_VERSION).then(r => (r.ok ? r.json() : null)).then(d => (MAPDATA = d)).catch(() => null)
   return mapPromise
 }
-const MAP_VERSION = '1'
+const MAP_VERSION = '202610071200'
 const START_TIME = 9 * 60
 const canvas = document.getElementById('game')
 const ctx = canvas.getContext('2d')
@@ -2899,7 +2899,9 @@ function roofLook(b) {
     sy += y + 0.5
     n++
   }
-  b.roof = { style, col, orient, cx: n ? sx / n : b.x + b.w / 2, cy: n ? sy / n : b.y + b.h / 2 }
+  const tl = []
+  for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) if (W.bld[idx(x, y)] === b.id) tl.push(idx(x, y))
+  b.roof = { style, col, orient, cx: n ? sx / n : b.x + b.w / 2, cy: n ? sy / n : b.y + b.h / 2, tl }
   return b.roof
 }
 
@@ -2913,38 +2915,41 @@ function drawRoofs(x0, y0, x1, y1) {
     const bx1 = Math.min(b.x + b.w - 1, x1 + 1)
     const by1 = Math.min(b.y + b.h - 1, y1 + 2)
     let vis = false
-    {
-      for (let y = b.y; y < b.y + b.h && !(b.wasSeen && vis); y++) for (let x = b.x; x < b.x + b.w; x++) {
-        const k = idx(x, y)
-        if (W.bld[k] !== b.id) continue
-        if (S.vis[k]) {
-          vis = true
-          b.wasSeen = true
-          break
-        }
-        if (S.seen[k]) b.wasSeen = true
+    const L = roofLook(b)
+    for (const k of L.tl) {
+      if (S.vis[k]) {
+        vis = true
+        b.wasSeen = true
+        break
       }
+      if (!b.wasSeen && S.seen[k]) b.wasSeen = true
     }
     if (!b.wasSeen) continue
+    const inView = []
+    for (const k of L.tl) {
+      const x = k % W.w
+      const y = (k / W.w) | 0
+      if (x >= bx0 && x <= bx1 && y >= by0 && y <= by1) inView.push(k)
+    }
     const target = b.id === inside ? 0 : 1
     const cur = roofFade[b.id] ?? target
     const a = cur + (target - cur) * 0.18
     roofFade[b.id] = a
     if (a < 0.02) continue
-    const L = roofLook(b)
     ctx.globalAlpha = a * 0.4
     ctx.fillStyle = '#000'
-    for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) {
-      if (W.bld[idx(x, y)] !== b.id) continue
+    for (const k of inView) {
+      const x = k % W.w
+      const y = (k / W.w) | 0
       const e = !inb(x + 1, y) || W.bld[idx(x + 1, y)] !== b.id
       const s = !inb(x, y + 1) || W.bld[idx(x, y + 1)] !== b.id
       if (e) ctx.fillRect(x * TS + TS, y * TS - H + 6, 7, TS)
       if (s) ctx.fillRect(x * TS + 4, y * TS - H + TS, TS, 9)
     }
     ctx.globalAlpha = a
-    for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) {
-      const k = idx(x, y)
-      if (W.bld[k] !== b.id) continue
+    for (const k of inView) {
+      const x = k % W.w
+      const y = (k / W.w) | 0
       const v = Math.floor(hash(x, y, 81) * 6)
       const lit = L.orient === 'h' ? y + 0.5 < L.cy : x + 0.5 < L.cx
       const px = x * TS
@@ -3001,7 +3006,7 @@ function drawRoofs(x0, y0, x1, y1) {
     if (!vis) {
       ctx.globalAlpha = a * 0.5
       ctx.fillStyle = 'rgb(5,7,11)'
-      for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) if (W.bld[idx(x, y)] === b.id) ctx.fillRect(x * TS, y * TS - H, TS + 0.6, TS + 0.6)
+      for (const k of inView) ctx.fillRect((k % W.w) * TS, ((k / W.w) | 0) * TS - H, TS + 0.6, TS + 0.6)
     }
     ctx.globalAlpha = 1
   }
@@ -3878,7 +3883,8 @@ function drawMap() {
     }
   }
   m.textAlign = 'left'
-  if (W.credit) $('mapcredit').textContent = W.credit
+  $('mapcredit').textContent = W.credit || ''
+  $('mapview').querySelector('h2').textContent = W.map ? `Mapa · ${W.map}` : 'Mapa de Vale Morto'
 }
 
 function b64(u) {
