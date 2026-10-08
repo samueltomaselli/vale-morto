@@ -1,10 +1,10 @@
-import { ITEMS, SKILLS, PROFESSIONS, TRAITS, RECIPES, LOOT, STACK_AMOUNTS, FURN } from './data.js?v=202610071200'
-import { createWorldFromMap, LABELS } from './mapworld.js?v=202610071200'
-import { T, createWorld, rollLoot } from './world.js?v=202610071200'
-import { sfx, unlockAudio, setAmbience, setVolumes, getVolumes } from './audio.js?v=202610071200'
-import { Ground, TS, WALL_H, FURN_LIFT, hash, shade, makeCanvas, furnSprite, treeSprite, carSprite, splatSprite, wallFace, roofTile, acUnit, ROOF_COLORS } from './gfx.js?v=202610071200'
-import { drawChar, HAIRS, OUTFITS } from './chars.js?v=202610071200'
-import { iconURL } from './icons.js?v=202610071200'
+import { ITEMS, SKILLS, PROFESSIONS, TRAITS, RECIPES, LOOT, STACK_AMOUNTS, FURN } from './data.js?v=202610080040'
+import { createWorldFromMap, LABELS } from './mapworld.js?v=202610080040'
+import { T, createWorld, rollLoot } from './world.js?v=202610080040'
+import { sfx, unlockAudio, setAmbience, setVolumes, getVolumes } from './audio.js?v=202610080040'
+import { Ground, TS, WALL_H, FURN_LIFT, hash, shade, makeCanvas, furnSprite, treeSprite, carSprite, splatSprite, wallFace, roofTile, acUnit, ROOF_COLORS } from './gfx.js?v=202610080040'
+import { drawChar, HAIRS, OUTFITS } from './chars.js?v=202610080040'
+import { iconURL } from './icons.js?v=202610080040'
 
 const SAVE_KEY = 'vale-morto-save-v3'
 let MAPDATA = null
@@ -14,7 +14,7 @@ function loadMapData() {
   if (!mapPromise) mapPromise = fetch('maps/jaragua.json?v=' + MAP_VERSION).then(r => (r.ok ? r.json() : null)).then(d => (MAPDATA = d)).catch(() => null)
   return mapPromise
 }
-const MAP_VERSION = '202610071200'
+const MAP_VERSION = '202610080040'
 const START_TIME = 9 * 60
 const canvas = document.getElementById('game')
 const ctx = canvas.getContext('2d')
@@ -376,7 +376,7 @@ function spawnInitialZombies() {
     const cy = randi(4, W.h - 5)
     if (!walkable(cx, cy)) continue
     if (!heartBias(cx, cy)) continue
-    if (dist(cx, cy, p.x, p.y) < 16) continue
+    if (dist(cx, cy, p.x, p.y) < (W.spawnClear || 16)) continue
     const indoor = W.bld[idx(cx, cy)] >= 0
     if (indoor && W.bld[idx(cx, cy)] === W.home) continue
     const n = indoor ? randi(1, 2) : randi(1, 5)

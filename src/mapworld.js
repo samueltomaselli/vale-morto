@@ -1,4 +1,4 @@
-import { T, mulberry32 } from './world.js?v=202610071200'
+import { T, mulberry32 } from './world.js?v=202610080040'
 
 const W4 = [[1, 0], [-1, 0], [0, 1], [0, -1]]
 
@@ -614,6 +614,31 @@ export function createWorldFromMap(data, seed) {
   homeTiles.sort((a, c) => Math.hypot(a[0] - home.x - home.w / 2, a[1] - home.y - home.h / 2) - Math.hypot(c[0] - home.x - home.w / 2, c[1] - home.y - home.h / 2))
   if (homeTiles.length) sp = { x: homeTiles[0][0] + 0.5, y: homeTiles[0][1] + 0.5 }
   for (const k in world.doors) if (world.bld[k] === home.id) world.doors[k].locked = false
+  const marista = world.buildings.find(b => /marista s[aã]o lu/i.test(b.name)) || world.buildings.find(b => b.type === 'school' && /marista/i.test(b.name))
+  if (marista) {
+    const outside = (x, y) => world.bld[idx(x, y)] < 0 && [T.SIDEWALK, T.PLAZA, T.ROAD, T.PARKING, T.GRASS, T.DIRT].includes(get(x, y))
+    let best = null
+    for (const k in world.doors) {
+      const ki = +k
+      const dx0 = ki % world.w, dy0 = (ki / world.w) | 0
+      for (const [ox, oy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const x1 = dx0 + ox, y1 = dy0 + oy
+        const bx = dx0 - ox, by = dy0 - oy
+        if (world.bld[idx(bx, by)] !== marista.id || !outside(x1, y1)) continue
+        let walk = 0, road = 0
+        for (let s = 1; s <= 8; s++) {
+          const t = get(dx0 + ox * s, dy0 + oy * s)
+          if (!outside(dx0 + ox * s, dy0 + oy * s)) break
+          walk = s
+          if (t === T.ROAD && !road) road = s
+        }
+        const score = (road ? 20 - road : 0) + walk + (get(x1, y1) === T.SIDEWALK ? 5 : 0)
+        if (!best || score > best.score) best = { score, x: dx0 + ox * Math.min(walk, 5), y: dy0 + oy * Math.min(walk, 5) }
+      }
+    }
+    if (best) sp = { x: best.x + 0.5, y: best.y + 0.5 }
+    world.spawnClear = 30
+  }
   world.spawn = sp
   world.popScale = 6
   return world

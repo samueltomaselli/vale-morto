@@ -1,4 +1,4 @@
-import { hash, shade } from './gfx.js?v=202610071200'
+import { hash, shade } from './gfx.js?v=202610080040'
 
 export const HAIRS = ['#2a1e14', '#4a3220', '#6e4a2a', '#b08a50', '#1a1a1a', '#8a8a82', '#5a2e1a', '#c8b48a']
 export const OUTFITS = ['tshirt', 'jacket', 'hoodie', 'police', 'medic', 'worker', 'suit', 'tank', 'flannel', 'dress']
